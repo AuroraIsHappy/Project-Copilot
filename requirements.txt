@@ -1,0 +1,8 @@
+streamlit==1.55.0
+litellm==1.82.2
+json-repair==0.58.5
+loguru==0.7.3
+keyring==25.6.0
+rich==14.3.3
+cairosvg==2.9.0
+pypdf==6.9.1

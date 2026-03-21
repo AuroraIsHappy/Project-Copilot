@@ -1,0 +1,26 @@
+# Local Python environments
+.conda/
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# IDE / editor settings
+.vscode/
+.idea/
+
+# Runtime-generated local data
+data/debug/
+memory/
+state/*.json
+state/projects/
+
+# Local staging for files intentionally excluded from GitHub
+not-included/
+
+# OS clutter
+.DS_Store
+Thumbs.db

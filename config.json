@@ -1,0 +1,104 @@
+{
+  "provider": "zhipu",
+  "providers": {
+    "custom": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "openai/gpt-4o-mini",
+      "max_tokens": 3000
+    },
+    "azure_openai": {
+      "base_url": "",
+      "model": "gpt-4o-mini",
+      "max_tokens": 3000
+    },
+    "anthropic": {
+      "base_url": "",
+      "model": "claude-3-5-sonnet-20241022",
+      "max_tokens": 3000
+    },
+    "openai": {
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "max_tokens": 3000
+    },
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "openai/gpt-4o-mini",
+      "max_tokens": 3000
+    },
+    "deepseek": {
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat",
+      "max_tokens": 3000
+    },
+    "groq": {
+      "base_url": "https://api.groq.com/openai/v1",
+      "model": "llama-3.1-70b-versatile",
+      "max_tokens": 3000
+    },
+    "zhipu": {
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-4.6",
+      "assistant_model": "glm-4.5-airX",
+      "progress_model": "glm-4.5-airX",
+      "max_tokens": 7000,
+      "progress_max_workers": 5,
+      "progress_llm_max_output_tokens": 5000
+    },
+    "dashscope": {
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen-max",
+      "max_tokens": 3000
+    },
+    "gemini": {
+      "base_url": "",
+      "model": "gemini-1.5-pro",
+      "max_tokens": 3000
+    },
+    "moonshot": {
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "moonshot-v1-8k",
+      "max_tokens": 3000
+    },
+    "minimax": {
+      "base_url": "https://api.minimax.io/v1",
+      "model": "MiniMax-M1",
+      "max_tokens": 3000
+    },
+    "aihubmix": {
+      "base_url": "https://aihubmix.com/v1",
+      "model": "gpt-4o-mini",
+      "max_tokens": 3000
+    },
+    "siliconflow": {
+      "base_url": "https://api.siliconflow.cn/v1",
+      "model": "Qwen/Qwen2.5-7B-Instruct",
+      "max_tokens": 3000
+    },
+    "volcengine": {
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "doubao-seed-1-6-250615",
+      "max_tokens": 3000
+    },
+    "openai_codex": {
+      "base_url": "https://chatgpt.com/backend-api",
+      "model": "gpt-5-codex",
+      "max_tokens": 3000
+    },
+    "github_copilot": {
+      "base_url": "",
+      "model": "github_copilot/gpt-4o-mini",
+      "max_tokens": 3000
+    },
+    "ollama": {
+      "base_url": "http://localhost:11434/v1",
+      "model": "llama3.2",
+      "max_tokens": 3000
+    },
+    "vllm": {
+      "base_url": "http://localhost:8000/v1",
+      "model": "meta-llama/Llama-3.1-8B-Instruct",
+      "max_tokens": 3000
+    }
+  }
+}
