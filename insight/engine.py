@@ -77,7 +77,7 @@ _REDDIT_CONNECT_HOSTS = (
 )
 _MAX_RERANKED_CANDIDATES = 10
 _MAX_RERANKED_CANDIDATES_PER_PROJECT = 30
-_MAX_PAPER_AGE_DAYS = 365
+_MAX_PAPER_AGE_DAYS = 200
 _MAX_RECENT_SOURCE_AGE_DAYS = 90
 _SOURCE_PRIORITY = {
     "open_source": 0.92,
@@ -99,29 +99,6 @@ _BLOG_EXCLUDED_DOMAINS = {
     "www.github.com",
     "arxiv.org",
     "www.arxiv.org",
-}
-
-_CN_TERM_MAP = {
-    "蛋白": "protein",
-    "蛋白质": "protein",
-    "序列": "sequence",
-    "结构": "structure",
-    "溶解": "solubility",
-    "预测": "prediction",
-    "模型": "model",
-    "训练": "training",
-    "鲁棒": "robustness",
-    "泛化": "generalization",
-    "机器人": "robotics",
-    "双臂": "dual-arm",
-    "精细": "dexterity",
-    "金融": "finance",
-    "交易": "trading",
-    "转化": "conversion",
-    "推荐": "recommendation",
-    "规划": "planning",
-    "调度": "scheduling",
-    "优化": "optimization",
 }
 
 _STOPWORDS = {
@@ -151,6 +128,9 @@ _STOPWORDS = {
 
 _reddit_backoff_until: datetime | None = None
 _reddit_backoff_reason = ""
+_DEFAULT_INSIGHT_KEYWORDS = ["machine learning", "optimization"]
+_MAX_RAW_KEYWORD_CANDIDATES = 24
+_KEYWORD_TRANSLATION_CACHE: dict[str, str] = {}
 
 
 def _resolve_insight_model() -> str:
@@ -165,59 +145,269 @@ def _resolve_insight_model() -> str:
     return str(cfg.get("model") or "").strip()
 
 
-def _project_context_text(project_name: str, tasks: list[dict]) -> str:
-    parts: list[str] = [str(project_name or "").strip()]
+def _project_context_lines(project_name: str, tasks: list[dict]) -> list[str]:
+    parts: list[str] = []
+    seen: set[str] = set()
+
+    project_label = str(project_name or "").strip()
+    if project_label:
+        normalized_label = re.sub(r"\s+", " ", project_label)
+        seen.add(normalized_label)
+        parts.append(normalized_label)
+
     for task in tasks[:30]:
         if not isinstance(task, dict):
             continue
         for key in ("objective", "kr", "task"):
             value = str(task.get(key, "") or "").strip()
-            if value:
-                parts.append(value)
-    return "\n".join([p for p in parts if p])
+            if not value:
+                continue
+            normalized_value = re.sub(r"\s+", " ", value)
+            if normalized_value in seen:
+                continue
+            seen.add(normalized_value)
+            parts.append(normalized_value)
+
+    return parts
+
+
+def _project_context_text(project_name: str, tasks: list[dict]) -> str:
+    return "\n".join(_project_context_lines(project_name, tasks))
+
+
+def _normalize_keyword_candidate(term: str, *, lowercase: bool = False) -> str:
+    normalized = str(term or "").strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = normalized.strip("：:，,。；;（）()[]【】'\"")
+    if lowercase:
+        normalized = normalized.lower()
+    return normalized
+
+
+def _normalize_english_query_keyword(term: str) -> str:
+    normalized = _normalize_keyword_candidate(term, lowercase=True)
+    normalized = re.sub(r"[^a-z0-9\-\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized or not re.search(r"[a-z]", normalized):
+        return ""
+    if normalized in _STOPWORDS:
+        return ""
+    return normalized
+
+
+def _is_english_keyword_candidate(term: str) -> bool:
+    normalized = _normalize_keyword_candidate(term)
+    if not normalized:
+        return False
+    return re.fullmatch(r"[A-Za-z][A-Za-z0-9\-\s]{1,80}", normalized) is not None
+
+
+def _append_keyword_candidate(candidates: list[str], seen: set[str], term: str, *, lowercase: bool = False) -> bool:
+    normalized = _normalize_keyword_candidate(term, lowercase=lowercase)
+    if not normalized:
+        return False
+
+    seen_key = normalized.lower()
+    min_length = 3 if re.search(r"[a-zA-Z]", normalized) else 2
+    if re.fullmatch(r"kr\d+", seen_key):
+        return False
+    if len(normalized) < min_length or seen_key in _STOPWORDS or seen_key in seen:
+        return False
+
+    seen.add(seen_key)
+    candidates.append(normalized)
+    return True
+
+
+def _extract_raw_keyword_candidates(project_name: str, tasks: list[dict], limit: int = _MAX_RAW_KEYWORD_CANDIDATES) -> list[str]:
+    context_lines = _project_context_lines(project_name, tasks)
+    if not context_lines:
+        return list(_DEFAULT_INSIGHT_KEYWORDS)
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    for line in context_lines:
+        english_terms = re.findall(r"[a-zA-Z][a-zA-Z0-9\-]{2,}", line)
+        for term in english_terms:
+            if _append_keyword_candidate(candidates, seen, term, lowercase=True) and len(candidates) >= limit:
+                return candidates
+
+    for line in context_lines:
+        normalized_line = re.sub(r"^(?:o|objective|kr\s*\d+)\s*[:：-]\s*", "", line, flags=re.IGNORECASE).strip()
+        for segment in re.split(r"[，,；;。.!?、/|]+", normalized_line):
+            candidate = _normalize_keyword_candidate(segment)
+            if not candidate or not re.search(r"[\u4e00-\u9fff]", candidate):
+                continue
+
+            pieces = [candidate]
+            if len(candidate) > 24:
+                extracted_pieces = re.findall(r"[\u4e00-\u9fff]{2,12}", candidate)
+                if extracted_pieces:
+                    pieces = extracted_pieces
+
+            for piece in pieces:
+                if _append_keyword_candidate(candidates, seen, piece) and len(candidates) >= limit:
+                    return candidates
+
+    if not candidates:
+        return list(_DEFAULT_INSIGHT_KEYWORDS)
+    return candidates
+
+
+def _translate_non_english_keywords(keywords: list[str], project_name: str, tasks: list[dict]) -> tuple[dict[str, str], str]:
+    sanitized_terms = [_normalize_keyword_candidate(term) for term in keywords if _normalize_keyword_candidate(term)]
+    if not sanitized_terms:
+        return {}, ""
+
+    model_name = _resolve_insight_model()
+    context_lines = _project_context_lines(project_name, tasks)
+    prompt = (
+        "You translate project keywords into concise English search phrases for technical papers, repositories, and blogs.\n"
+        "Return JSON only with this shape: {\"translations\":[{\"source\":\"...\",\"english\":\"...\"}]}\n"
+        "Rules:\n"
+        "- english must be lowercase and concise, ideally 1-5 words.\n"
+        "- preserve technical acronyms like llm, rag, rl, mcp when appropriate.\n"
+        "- prefer domain nouns and stable technical phrases over generic verbs like improve or optimize.\n"
+        "- include every source term at most once.\n"
+        f"Project name: {project_name}\n"
+        f"Context lines: {json.dumps(context_lines[:12], ensure_ascii=False)}\n"
+        f"Source terms: {json.dumps(sanitized_terms, ensure_ascii=False)}"
+    )
+
+    try:
+        response = call_llm_messages(
+            [
+                {
+                    "role": "system",
+                    "content": "Return JSON only. Do not explain your reasoning.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            inject_system_memory=False,
+            model_override=model_name or None,
+            trace_label="insight_keyword_translate_v1",
+        )
+    except Exception as exc:
+        return {}, str(exc)
+
+    parsed = extract_json(response)
+    raw_items = []
+    if isinstance(parsed, dict):
+        raw_items = parsed.get("translations", [])
+    elif isinstance(parsed, list):
+        raw_items = parsed
+
+    translations: dict[str, str] = {}
+    for item in raw_items if isinstance(raw_items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        source = _normalize_keyword_candidate(item.get("source"))
+        english = _normalize_english_query_keyword(item.get("english"))
+        if not source or not english:
+            continue
+        translations[source] = english
+
+    return translations, ""
+
+
+def _translate_keywords_to_english(
+    raw_keywords: list[str],
+    project_name: str,
+    tasks: list[dict],
+    *,
+    limit: int = 12,
+) -> tuple[list[str], dict[str, str], str]:
+    query_keywords: list[str] = []
+    translation_map: dict[str, str] = {}
+    seen_query_keywords: set[str] = set()
+    pending_non_english: list[str] = []
+
+    for raw_term in raw_keywords:
+        normalized_raw = _normalize_keyword_candidate(raw_term)
+        if not normalized_raw:
+            continue
+
+        if _is_english_keyword_candidate(normalized_raw):
+            english_term = _normalize_english_query_keyword(normalized_raw)
+            if not english_term:
+                continue
+            translation_map[normalized_raw] = english_term
+            if english_term in seen_query_keywords:
+                continue
+            seen_query_keywords.add(english_term)
+            query_keywords.append(english_term)
+            if len(query_keywords) >= limit:
+                return query_keywords[:limit], translation_map, ""
+            continue
+
+        pending_non_english.append(normalized_raw)
+
+    uncached_terms = [term for term in pending_non_english if term not in _KEYWORD_TRANSLATION_CACHE]
+    translation_error = ""
+    if uncached_terms:
+        translated_batch, translation_error = _translate_non_english_keywords(uncached_terms, project_name, tasks)
+        for source_term, english_term in translated_batch.items():
+            _KEYWORD_TRANSLATION_CACHE[source_term] = english_term
+
+    for raw_term in pending_non_english:
+        english_term = _normalize_english_query_keyword(_KEYWORD_TRANSLATION_CACHE.get(raw_term, ""))
+        translation_map[raw_term] = english_term
+        if not english_term or english_term in seen_query_keywords:
+            continue
+        seen_query_keywords.add(english_term)
+        query_keywords.append(english_term)
+        if len(query_keywords) >= limit:
+            break
+
+    if not query_keywords:
+        query_keywords = list(_DEFAULT_INSIGHT_KEYWORDS)
+
+    return query_keywords[:limit], translation_map, translation_error
+
+
+def _extract_keyword_bundle(project_name: str, tasks: list[dict], limit: int = 12) -> dict:
+    effective_limit = max(1, int(limit or 12))
+    raw_keywords = _extract_raw_keyword_candidates(project_name, tasks, limit=max(_MAX_RAW_KEYWORD_CANDIDATES, effective_limit * 2))
+    query_keywords, translation_map, translation_error = _translate_keywords_to_english(
+        raw_keywords,
+        project_name,
+        tasks,
+        limit=effective_limit,
+    )
+
+    displayed_raw_keywords = raw_keywords[:effective_limit]
+    translation_pairs: list[dict] = []
+    untranslated_keywords: list[str] = []
+    translation_applied = False
+
+    for raw_term in displayed_raw_keywords:
+        normalized_raw = _normalize_keyword_candidate(raw_term)
+        translated = translation_map.get(normalized_raw, "")
+        if translated:
+            translation_pairs.append({"source": raw_term, "english": translated})
+            if not _is_english_keyword_candidate(raw_term):
+                translation_applied = True
+        elif not _is_english_keyword_candidate(raw_term):
+            untranslated_keywords.append(raw_term)
+
+    return {
+        "raw_keywords": displayed_raw_keywords,
+        "query_keywords": query_keywords[:effective_limit],
+        "translation_pairs": translation_pairs[:effective_limit],
+        "untranslated_keywords": untranslated_keywords[:effective_limit],
+        "translation_applied": translation_applied,
+        "translation_error": translation_error,
+        "extraction_method": "project_name + objective/kr/task text -> regex english terms + chinese phrase candidates -> llm translation to english query keywords",
+    }
 
 
 def _extract_keywords(project_name: str, tasks: list[dict], limit: int = 12) -> list[str]:
-    context_text = _project_context_text(project_name, tasks)
-    if not context_text:
-        return ["machine learning", "project planning"]
-
-    keywords: list[str] = []
-    seen: set[str] = set()
-
-    english_terms = re.findall(r"[a-zA-Z][a-zA-Z0-9\-]{2,}", context_text)
-    for term in english_terms:
-        normalized = term.lower().strip()
-        if normalized in _STOPWORDS or len(normalized) < 3:
-            continue
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        keywords.append(normalized)
-        if len(keywords) >= limit:
-            return keywords
-
-    chinese_terms = re.findall(r"[\u4e00-\u9fff]{2,8}", context_text)
-    for term in chinese_terms:
-        mapped = None
-        for cn_key, mapped_en in _CN_TERM_MAP.items():
-            if cn_key in term:
-                mapped = mapped_en
-                break
-        normalized = mapped or term
-        normalized = normalized.lower().strip()
-        if normalized in _STOPWORDS or len(normalized) < 2:
-            continue
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        keywords.append(normalized)
-        if len(keywords) >= limit:
-            break
-
-    if not keywords:
-        return ["machine learning", "optimization"]
-    return keywords
+    bundle = _extract_keyword_bundle(project_name, tasks, limit=limit)
+    keywords = bundle.get("query_keywords", []) if isinstance(bundle, dict) else []
+    if isinstance(keywords, list) and keywords:
+        return [str(item or "").strip() for item in keywords if str(item or "").strip()]
+    return list(_DEFAULT_INSIGHT_KEYWORDS)
 
 
 def _build_arxiv_query(keywords: list[str]) -> str:
@@ -1269,13 +1459,19 @@ def _diversify_candidates(candidates: list[dict], limit: int) -> list[dict]:
     return selected[:limit]
 
 
-def _rerank_candidates(project_name: str, tasks: list[dict], candidates: list[dict], limit: int = _MAX_RERANKED_CANDIDATES) -> list[dict]:
+def _rerank_candidates(
+    project_name: str,
+    tasks: list[dict],
+    candidates: list[dict],
+    keywords: list[str] | None = None,
+    limit: int = _MAX_RERANKED_CANDIDATES,
+) -> list[dict]:
     if not candidates:
         return []
 
-    keywords = _extract_keywords(project_name, tasks)
+    effective_keywords = keywords if isinstance(keywords, list) and keywords else _extract_keywords(project_name, tasks)
     project_context = _project_context_text(project_name, tasks)
-    scored = [_score_candidate(candidate, keywords, project_context) for candidate in candidates if isinstance(candidate, dict)]
+    scored = [_score_candidate(candidate, effective_keywords, project_context) for candidate in candidates if isinstance(candidate, dict)]
     scored.sort(key=lambda item: float(item.get("relevance_score", 0.0) or 0.0), reverse=True)
 
     deduped: list[dict] = []
@@ -1366,7 +1562,13 @@ def _retrieve_candidates(
                 source_errors.append(f"{source_name}: {source_errors_local[0]}")
 
     filtered_candidates, age_filter_meta = _apply_hard_age_filter(raw_candidates)
-    reranked = _rerank_candidates(project_name, tasks, filtered_candidates, limit=effective_rerank_limit)
+    reranked = _rerank_candidates(
+        project_name,
+        tasks,
+        filtered_candidates,
+        keywords=keywords,
+        limit=effective_rerank_limit,
+    )
     retrieval_meta = {
         "source": "multi",
         "enabled_sources": selected_sources,
@@ -1584,7 +1786,10 @@ def generate_insight_feed(
         effective_rerank_limit = max(3, min(_MAX_RERANKED_CANDIDATES_PER_PROJECT, effective_rerank_limit))
 
     excluded_url_keys = _normalize_excluded_url_keys(exclude_url_keys)
-    keywords = _extract_keywords(project_name, tasks)
+    keyword_bundle = _extract_keyword_bundle(project_name, tasks)
+    keywords = keyword_bundle.get("query_keywords", []) if isinstance(keyword_bundle, dict) else []
+    if not isinstance(keywords, list) or not keywords:
+        keywords = list(_DEFAULT_INSIGHT_KEYWORDS)
 
     try:
         candidates, retrieval_meta = _retrieve_candidates(
@@ -1600,6 +1805,17 @@ def generate_insight_feed(
             "status": "error",
             "message": f"insight 检索失败：{exc}",
             "feed": None,
+        }
+
+    if isinstance(retrieval_meta, dict):
+        retrieval_meta["keyword_extraction"] = {
+            "raw_keywords": list(keyword_bundle.get("raw_keywords", [])) if isinstance(keyword_bundle, dict) else [],
+            "query_keywords": list(keywords[:12]),
+            "translation_pairs": list(keyword_bundle.get("translation_pairs", [])) if isinstance(keyword_bundle, dict) else [],
+            "untranslated_keywords": list(keyword_bundle.get("untranslated_keywords", [])) if isinstance(keyword_bundle, dict) else [],
+            "translation_applied": bool(keyword_bundle.get("translation_applied")) if isinstance(keyword_bundle, dict) else False,
+            "translation_error": str(keyword_bundle.get("translation_error") or "") if isinstance(keyword_bundle, dict) else "",
+            "extraction_method": str(keyword_bundle.get("extraction_method") or "") if isinstance(keyword_bundle, dict) else "",
         }
 
     excluded_by_history = 0
@@ -1677,6 +1893,7 @@ def generate_insight_feed(
         "generated_at": generated_at,
         "cards": cards,
         "keywords": keywords[:12],
+        "keyword_extraction": dict(retrieval_meta.get("keyword_extraction", {})) if isinstance(retrieval_meta, dict) else {},
         "retrieval": retrieval_meta,
     }
 

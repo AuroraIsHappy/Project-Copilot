@@ -995,6 +995,11 @@ def _clone_insight_feed_snapshot(feed: dict) -> dict | None:
         for item in (raw_keywords if isinstance(raw_keywords, list) else [])
         if str(item or "").strip()
     ]
+    keyword_extraction = (
+        dict(feed.get("keyword_extraction", {}))
+        if isinstance(feed.get("keyword_extraction"), dict)
+        else {}
+    )
     retrieval = feed.get("retrieval", {}) if isinstance(feed.get("retrieval"), dict) else {}
 
     return {
@@ -1003,6 +1008,7 @@ def _clone_insight_feed_snapshot(feed: dict) -> dict | None:
         "generated_at": str(feed.get("generated_at") or "").strip(),
         "cards": cards,
         "keywords": keywords,
+        "keyword_extraction": keyword_extraction,
         "retrieval": dict(retrieval),
     }
 
