@@ -58,6 +58,7 @@ from utils.llm_client import get_token_usage_tracker
 from utils.llm_client import get_provider_specs
 from utils.llm_client import load_llm_config
 from utils.llm_client import reset_token_usage_tracker
+from utils.llm_client import reset_llm_config
 from utils.llm_client import save_llm_config
 from utils.llm_client import set_api_key
 from state.state_manager import load_project_assistant_state
@@ -1024,50 +1025,62 @@ def render_llm_settings() -> None:
     with st.sidebar.expander("LLM 配置", expanded=False):
         cfg = load_llm_config()
         provider_specs = get_provider_specs()
-        provider_names = list(provider_specs.keys())
+        provider_names = [""] + list(provider_specs.keys())
         provider_index = provider_names.index(cfg["provider"]) if cfg["provider"] in provider_names else 0
 
         provider = st.selectbox(
             "Provider",
             options=provider_names,
             index=provider_index,
-            format_func=lambda x: provider_specs[x]["label"],
+            format_func=lambda x: "请选择 Provider" if not x else provider_specs[x]["label"],
             key="llm_provider_select",
         )
 
         if provider != cfg["provider"]:
-            switched_spec = provider_specs[provider]
-            save_llm_config(
-                provider,
-                switched_spec["default_model"],
-                switched_spec["default_base_url"],
-                switched_spec["default_max_tokens"],
-                switched_spec["default_progress_max_workers"],
-                switched_spec["default_progress_llm_max_output_tokens"],
-                switched_spec["default_progress_model"],
-                switched_spec["default_assistant_model"],
-            )
-            st.success("已切换 Provider，Base URL 已自动更新。")
+            if provider:
+                switched_spec = provider_specs[provider]
+                save_llm_config(
+                    provider,
+                    switched_spec["default_model"],
+                    switched_spec["default_base_url"],
+                    switched_spec["default_max_tokens"],
+                    switched_spec["default_progress_max_workers"],
+                    switched_spec["default_progress_llm_max_output_tokens"],
+                    switched_spec["default_progress_model"],
+                    switched_spec["default_assistant_model"],
+                )
+                st.success("已切换 Provider，Base URL 已自动更新。")
+            else:
+                reset_llm_config()
+                st.success("已重置为未配置状态。")
             st.rerun()
 
-        current_spec = provider_specs[cfg["provider"]]
-        st.caption(f"Auto Base URL: {cfg['base_url']}")
+        selected_provider = provider or cfg["provider"]
+        current_spec = provider_specs.get(selected_provider)
+        if current_spec:
+            st.caption(f"Auto Base URL: {cfg['base_url']}")
+        else:
+            st.caption("Auto Base URL: 选择 Provider 后自动填充")
+            st.info("当前还没有选择 Provider。首次使用请先选择 Provider，再填写模型与 API Key。")
 
         with st.form("llm_config_form"):
             task_generation_model = st.text_input(
                 "任务生成模型（Generate Task）",
                 value=cfg["model"],
                 help="仅用于 OKR 任务生成流程（Generate Plan），不用于 Assistant 聊天或总结进度更新。",
+                disabled=not current_spec,
             )
             assistant_model = st.text_input(
                 "Assistant 模型（聊天助手）",
                 value=cfg.get("assistant_model", cfg["model"]),
                 help="用于右侧 Assistant 聊天能力（含意图识别、重规划建议、记忆提取）的专用模型。",
+                disabled=not current_spec,
             )
             progress_model = st.text_input(
                 "Progress 模型（读取总结/更新任务）",
                 value=cfg.get("progress_model", cfg["model"]),
                 help="用于读取工作总结并更新任务状态的专用模型，可与主模型不同。",
+                disabled=not current_spec,
             )
             max_tokens = st.number_input(
                 "Max Tokens",
@@ -1076,6 +1089,7 @@ def render_llm_settings() -> None:
                 value=int(cfg["max_tokens"]),
                 step=100,
                 help="限制单次模型输出上限，避免异常消耗过多 token。",
+                disabled=not current_spec,
             )
             progress_max_workers = st.number_input(
                 "Progress 并发数",
@@ -1084,6 +1098,7 @@ def render_llm_settings() -> None:
                 value=int(cfg.get("progress_max_workers", 3)),
                 step=1,
                 help="用于工作总结进度估计流程（progress_estimator）的并发请求数。",
+                disabled=not current_spec,
             )
             progress_llm_max_output_tokens = st.number_input(
                 "Progress 输出上限 Tokens",
@@ -1092,32 +1107,39 @@ def render_llm_settings() -> None:
                 value=int(cfg.get("progress_llm_max_output_tokens", 5000)),
                 step=100,
                 help="用于工作总结进度估计流程（progress_estimator）的单次输出 token 上限。",
+                disabled=not current_spec,
             )
             api_key = st.text_input(
                 "API Key",
                 type="password",
                 placeholder="仅首次输入，后续自动读取",
                 help="API Key 会按 provider 分开保存在系统凭据库，不写入 config.json。",
+                disabled=not current_spec,
             )
-            submitted = st.form_submit_button("保存配置")
+            submitted = st.form_submit_button("保存配置", disabled=not current_spec)
 
         if submitted:
-            save_ok = save_llm_config(
-                provider,
-                task_generation_model,
-                current_spec["default_base_url"],
-                int(max_tokens),
-                int(progress_max_workers),
-                int(progress_llm_max_output_tokens),
-                progress_model,
-                assistant_model,
-            )
+            save_error = ""
+            try:
+                save_ok = save_llm_config(
+                    selected_provider,
+                    task_generation_model,
+                    current_spec["default_base_url"],
+                    int(max_tokens),
+                    int(progress_max_workers),
+                    int(progress_llm_max_output_tokens),
+                    progress_model,
+                    assistant_model,
+                )
+            except ValueError as exc:
+                save_error = str(exc)
+                save_ok = False
             if not save_ok:
-                st.error("配置保存失败，请检查文件权限。")
+                st.error(save_error or "配置保存失败，请检查文件权限。")
             else:
                 if api_key.strip():
                     try:
-                        set_api_key(api_key, provider)
+                        set_api_key(api_key, selected_provider)
                     except RuntimeError:
                         st.error("未安装 keyring，无法安全保存 API Key。请安装: pip install keyring")
                     except ValueError as exc:
@@ -1129,25 +1151,28 @@ def render_llm_settings() -> None:
                     st.success("配置已保存。")
                     st.rerun()
 
-        state_label = "已保存" if cfg["has_api_key"] else "未保存"
         st.caption(f"当前 Provider: {cfg['provider_label']}")
-        st.caption(f"API Key 状态: {state_label}")
-        st.caption(f"任务生成模型: {cfg['model']}")
-        st.caption(f"Max Tokens: {cfg['max_tokens']}")
-        st.caption(f"Assistant 模型: {cfg.get('assistant_model', cfg['model'])}")
-        st.caption(f"Progress 模型: {cfg.get('progress_model', cfg['model'])}")
-        st.caption(f"Progress 并发数: {cfg.get('progress_max_workers', 3)}")
-        st.caption(f"Progress 输出上限 Tokens: {cfg.get('progress_llm_max_output_tokens', 5000)}")
-        if cfg["use_env_key"]:
-            if cfg["env_key"]:
-                st.caption(f"当前使用环境变量 {cfg['env_key']} 或 OKR_OPENAI_API_KEY。")
-            else:
-                st.caption("当前使用环境变量 OKR_OPENAI_API_KEY。")
+        if cfg.get("is_configured"):
+            state_label = "已保存" if cfg["has_api_key"] else "未保存"
+            st.caption(f"API Key 状态: {state_label}")
+            st.caption(f"任务生成模型: {cfg['model']}")
+            st.caption(f"Max Tokens: {cfg['max_tokens']}")
+            st.caption(f"Assistant 模型: {cfg.get('assistant_model', cfg['model'])}")
+            st.caption(f"Progress 模型: {cfg.get('progress_model', cfg['model'])}")
+            st.caption(f"Progress 并发数: {cfg.get('progress_max_workers', 3)}")
+            st.caption(f"Progress 输出上限 Tokens: {cfg.get('progress_llm_max_output_tokens', 5000)}")
+            if cfg["use_env_key"]:
+                if cfg["env_key"]:
+                    st.caption(f"当前使用环境变量 {cfg['env_key']} 或 OKR_OPENAI_API_KEY。")
+                else:
+                    st.caption("当前使用环境变量 OKR_OPENAI_API_KEY。")
 
-        if cfg["api_key_optional"]:
-            st.caption("该 Provider 可不填 API Key（本地服务常见）。")
+            if cfg["api_key_optional"]:
+                st.caption("该 Provider 可不填 API Key（本地服务常见）。")
+        else:
+            st.caption("API Key 状态: 未配置")
 
-        if cfg["has_api_key"] and st.button("清除已保存 API Key", key="clear_api_key_btn"):
+        if cfg["has_api_key"] and cfg.get("is_configured") and st.button("清除已保存 API Key", key="clear_api_key_btn"):
             clear_api_key(cfg["provider"])
             st.success("已清除本地保存的 API Key。")
             st.rerun()

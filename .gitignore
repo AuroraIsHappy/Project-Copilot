@@ -13,6 +13,7 @@ __pycache__/
 .idea/
 
 # Runtime-generated local data
+config.json
 data/debug/
 memory/
 state/*.json

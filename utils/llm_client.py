@@ -20,6 +20,7 @@ ACCOUNT_NAME = "llm_api_key"
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.json"
 LLM_ATTEMPT_LOG_PATH = Path(__file__).resolve().parents[1] / "data" / "debug" / "llm_attempt_log.txt"
 DEFAULT_PROVIDER = "openai"
+UNCONFIGURED_PROVIDER = ""
 DEFAULT_MAX_TOKENS = 3000
 MAX_TOKENS_HARD_CAP = 8000
 DEFAULT_PROGRESS_MAX_WORKERS = 3
@@ -379,10 +380,12 @@ def _inject_system_memory(messages: list[dict], enabled: bool = True) -> list[di
     return [{"role": "system", "content": memory_block}, *prepared]
 
 
-def _resolve_provider(provider: str | None) -> str:
+def _resolve_provider(provider: str | None, *, allow_unconfigured: bool = False) -> str:
     name = (provider or "").strip().lower()
     if name in PROVIDER_REGISTRY:
         return name
+    if allow_unconfigured:
+        return UNCONFIGURED_PROVIDER
     return DEFAULT_PROVIDER
 
 
@@ -445,21 +448,16 @@ def _normalize_progress_llm_max_output_tokens(value: int | str | None) -> int:
 
 def load_llm_config() -> dict:
     file_config = read_json(CONFIG_PATH, default={})
-    provider = _resolve_provider(file_config.get("provider", DEFAULT_PROVIDER))
+    provider = _resolve_provider(file_config.get("provider"), allow_unconfigured=True)
 
     providers_config = file_config.get("providers", {})
     if not isinstance(providers_config, dict):
         providers_config = {}
 
-    provider_spec = PROVIDER_REGISTRY[provider]
-    selected_config = providers_config.get(provider, {})
+    selected_config = providers_config.get(provider, {}) if provider else {}
     if not isinstance(selected_config, dict):
         selected_config = {}
 
-    base_url = selected_config.get("base_url", provider_spec["default_base_url"])
-    model = selected_config.get("model", provider_spec["default_model"])
-    assistant_model = str(selected_config.get("assistant_model", model) or model).strip() or model
-    progress_model = str(selected_config.get("progress_model", model) or model).strip() or model
     max_tokens = _normalize_max_tokens(selected_config.get("max_tokens", DEFAULT_MAX_TOKENS))
     progress_max_workers = _normalize_progress_max_workers(
         selected_config.get("progress_max_workers", DEFAULT_PROGRESS_MAX_WORKERS)
@@ -471,13 +469,34 @@ def load_llm_config() -> dict:
         )
     )
 
-    env_key_name = provider_spec.get("env_key", "")
-    env_key_value = (os.getenv(env_key_name, "").strip() if env_key_name else "")
-    compat_env_key = os.getenv("OKR_OPENAI_API_KEY", "").strip()
+    if provider:
+        provider_spec = PROVIDER_REGISTRY[provider]
+        base_url = selected_config.get("base_url", provider_spec["default_base_url"])
+        model = selected_config.get("model", provider_spec["default_model"])
+        assistant_model = str(selected_config.get("assistant_model", model) or model).strip() or model
+        progress_model = str(selected_config.get("progress_model", model) or model).strip() or model
+        env_key_name = provider_spec.get("env_key", "")
+        env_key_value = (os.getenv(env_key_name, "").strip() if env_key_name else "")
+        compat_env_key = os.getenv("OKR_OPENAI_API_KEY", "").strip()
+        provider_label = provider_spec["label"]
+        api_key_optional = provider_spec["api_key_optional"]
+        has_api_key = bool(get_api_key(provider))
+        use_env_key = bool(env_key_value or compat_env_key)
+    else:
+        base_url = ""
+        model = ""
+        assistant_model = ""
+        progress_model = ""
+        env_key_name = ""
+        provider_label = "未配置"
+        api_key_optional = False
+        has_api_key = False
+        use_env_key = False
 
     config = {
         "provider": provider,
-        "provider_label": provider_spec["label"],
+        "provider_label": provider_label,
+        "is_configured": bool(provider),
         "base_url": base_url,
         "model": model,
         "assistant_model": assistant_model,
@@ -486,9 +505,9 @@ def load_llm_config() -> dict:
         "progress_max_workers": progress_max_workers,
         "progress_llm_max_output_tokens": progress_llm_max_output_tokens,
         "env_key": env_key_name,
-        "api_key_optional": provider_spec["api_key_optional"],
-        "has_api_key": bool(get_api_key(provider)),
-        "use_env_key": bool(env_key_value or compat_env_key),
+        "api_key_optional": api_key_optional,
+        "has_api_key": has_api_key,
+        "use_env_key": use_env_key,
         "provider_options": [
             {
                 "name": name,
@@ -526,7 +545,10 @@ def save_llm_config(
     if not isinstance(providers, dict):
         providers = {}
 
-    provider_name = _resolve_provider(provider)
+    provider_name = _resolve_provider(provider, allow_unconfigured=True)
+    if not provider_name:
+        raise ValueError("请先选择 Provider。")
+
     provider_spec = PROVIDER_REGISTRY[provider_name]
     selected_base_url = (base_url or "").strip() or provider_spec["default_base_url"]
     selected_model = model.strip() or provider_spec["default_model"]
@@ -573,6 +595,22 @@ def save_llm_config(
     return write_json(CONFIG_PATH, payload)
 
 
+def reset_llm_config() -> bool:
+    raw = read_json(CONFIG_PATH, default={})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    providers = raw.get("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
+
+    payload = {
+        "provider": UNCONFIGURED_PROVIDER,
+        "providers": providers,
+    }
+    return write_json(CONFIG_PATH, payload)
+
+
 def set_api_key(api_key: str, provider: str) -> None:
     clean_key = api_key.strip()
     if not clean_key:
@@ -581,17 +619,23 @@ def set_api_key(api_key: str, provider: str) -> None:
     if keyring is None:
         raise RuntimeError("缺少 keyring 依赖，无法安全持久化 API Key")
 
-    provider_name = _resolve_provider(provider)
+    provider_name = _resolve_provider(provider, allow_unconfigured=True)
+    if not provider_name:
+        raise ValueError("请先选择 Provider。")
+
     keyring.set_password(SERVICE_NAME, _provider_account_name(provider_name), clean_key)
 
 
 def get_api_key(provider: str) -> str:
+    provider_name = _resolve_provider(provider, allow_unconfigured=True)
+    if not provider_name:
+        return ""
+
     # 环境变量优先，便于部署时走 CI/CD Secret 管理。
     env_key = os.getenv("OKR_OPENAI_API_KEY", "").strip()
     if env_key:
         return env_key
 
-    provider_name = _resolve_provider(provider)
     provider_env_key = PROVIDER_REGISTRY[provider_name].get("env_key", "")
     if provider_env_key:
         provider_env_value = os.getenv(provider_env_key, "").strip()
@@ -623,7 +667,10 @@ def clear_api_key(provider: str) -> None:
     if keyring is None:
         return
 
-    provider_name = _resolve_provider(provider)
+    provider_name = _resolve_provider(provider, allow_unconfigured=True)
+    if not provider_name:
+        return
+
     for service_name in (SERVICE_NAME, *LEGACY_SERVICE_NAMES):
         try:
             keyring.delete_password(service_name, _provider_account_name(provider_name))
@@ -664,7 +711,10 @@ def call_llm_messages(
 ) -> str:
     _TOKEN_USAGE_TRACKER["logical_call_count"] += 1
     config = load_llm_config()
-    provider = config["provider"]
+    provider = str(config.get("provider") or "").strip()
+    if not provider:
+        raise ValueError("未配置 LLM Provider，请先在侧边栏 LLM 配置中选择 Provider 并保存。")
+
     api_key = get_api_key(provider)
     if not api_key and not config["api_key_optional"]:
         raise ValueError("未检测到 API Key，请先在 UI 配置或设置 OKR_OPENAI_API_KEY")
