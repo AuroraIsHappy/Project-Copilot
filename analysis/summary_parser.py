@@ -14,8 +14,24 @@ except Exception:  # pragma: no cover - graceful fallback when dependency is mis
 _TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".log", ".json", ".docx", ".pdf", ".xlsx", ".doc"}
 
 
+def _strip_wrapping_quotes(text: str) -> str:
+    normalized = str(text or "").strip()
+    quote_pairs = (("'", "'"), ('"', '"'), ("‘", "’"), ("“", "”"))
+
+    changed = True
+    while changed and len(normalized) >= 2:
+        changed = False
+        for left, right in quote_pairs:
+            if normalized.startswith(left) and normalized.endswith(right):
+                normalized = normalized[len(left): len(normalized) - len(right)].strip()
+                changed = True
+                break
+
+    return normalized
+
+
 def normalize_summary_folder_path(folder) -> str:
-    folder_text = str(folder or "").strip()
+    folder_text = _strip_wrapping_quotes(str(folder or "").strip())
     if not folder_text:
         return ""
 
