@@ -4,6 +4,7 @@ from planner.multi_agent_planner import multi_agent_plan
 from planning.scheduler import schedule_tasks
 from analysis.summary_parser import find_summary_snippets
 from analysis.summary_parser import load_summaries_with_names
+from analysis.summary_parser import normalize_summary_folder_path
 from analysis.progress_estimator import estimate_progress_from_summaries
 from analysis.risk_predictor import predict_risk
 from insight.engine import generate_insight_feed
@@ -1790,7 +1791,18 @@ def update_tasks_from_summaries(
             "message": "当前项目暂无任务，无法从总结更新进度。",
         }
 
-    all_pairs = load_summaries_with_names(summaries_folder)
+    normalized_folder = normalize_summary_folder_path(summaries_folder)
+    folder_path = Path(normalized_folder) if normalized_folder else None
+    if folder_path is None or not folder_path.exists() or not folder_path.is_dir():
+        return {
+            "status": "invalid_summaries_folder",
+            "message": "指定路径不存在，或该路径不是文件夹。",
+            "summaries_count": 0,
+            "skipped_filenames": [],
+            "new_filenames": [],
+        }
+
+    all_pairs = load_summaries_with_names(normalized_folder)
     if not all_pairs:
         return {
             "status": "no_summaries",
@@ -2166,7 +2178,7 @@ def _summary_source_hint(rel_filename: str) -> str:
 
 
 def _load_recent_summary_snapshots(folder: str, *, max_files: int = _GLOBAL_RISK_RECENT_SUMMARY_FILES) -> list[dict]:
-    folder_text = str(folder or "").strip()
+    folder_text = normalize_summary_folder_path(folder)
     if not folder_text:
         return []
 

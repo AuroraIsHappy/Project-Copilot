@@ -29,6 +29,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
+from analysis.summary_parser import normalize_summary_folder_path
 from controller import generate_plan_by_mode
 from controller import load_tasks_from_state
 from controller import load_plan_from_state
@@ -1592,6 +1593,40 @@ def _show_summary_on_dashboard_key(project_id: str) -> str:
     return f"show_summary_on_dashboard_{project_id}"
 
 
+def _normalize_summary_seen_map(raw_seen_map) -> dict[str, list[str]]:
+    if not isinstance(raw_seen_map, dict):
+        return {}
+
+    normalized: dict[str, list[str]] = {}
+    for raw_folder, raw_names in raw_seen_map.items():
+        folder = normalize_summary_folder_path(raw_folder)
+        if not folder:
+            continue
+
+        if isinstance(raw_names, list):
+            iterable = raw_names
+        elif isinstance(raw_names, (set, tuple)):
+            iterable = list(raw_names)
+        else:
+            continue
+
+        names: list[str] = []
+        seen_names: set[str] = set()
+        for raw_name in iterable:
+            name = str(raw_name or "").replace("\\", "/").strip()
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            names.append(name)
+
+        existing = normalized.setdefault(folder, [])
+        for name in names:
+            if name not in existing:
+                existing.append(name)
+
+    return normalized
+
+
 def _hydrate_summary_state(project_id: str, force: bool = False) -> None:
     """Ensure summary path + seen-files cache are available in session_state."""
     saved_key = _saved_summary_folder_key(project_id)
@@ -1603,9 +1638,9 @@ def _hydrate_summary_state(project_id: str, force: bool = False) -> None:
             return
 
     persisted = load_project_summary_state(project_id)
-    st.session_state[saved_key] = str(persisted.get("saved_summary_folder", "") or "").strip()
-    seen_summary_files = persisted.get("seen_summary_files", {})
-    st.session_state[seen_key] = seen_summary_files if isinstance(seen_summary_files, dict) else {}
+    st.session_state[saved_key] = normalize_summary_folder_path(persisted.get("saved_summary_folder", ""))
+    seen_summary_files = _normalize_summary_seen_map(persisted.get("seen_summary_files", {}))
+    st.session_state[seen_key] = seen_summary_files
 
 
 def _hydrate_summary_update_result(project_id: str, force: bool = False) -> None:
@@ -2529,10 +2564,11 @@ def _render_update_summary_form(project_id: str) -> None:
 
     saved_key = _saved_summary_folder_key(project_id)
     seen_key = _seen_files_key(project_id)
-    saved_path: str = st.session_state.get(saved_key, "")
+    saved_path = normalize_summary_folder_path(st.session_state.get(saved_key, ""))
     # seen_map: {folder_str: [list of already-processed relative filenames]}
     raw_seen_map = st.session_state.get(seen_key, {})
-    seen_map: dict = raw_seen_map if isinstance(raw_seen_map, dict) else {}
+    seen_map = _normalize_summary_seen_map(raw_seen_map)
+    st.session_state[seen_key] = seen_map
     saved_threshold, has_saved_threshold = load_saved_risk_threshold(project_id)
 
     # Path input now supports dropdown quick-pick from historical folders.
@@ -2540,11 +2576,11 @@ def _render_update_summary_form(project_id: str) -> None:
     if summary_folder_key not in st.session_state:
         st.session_state[summary_folder_key] = saved_path
 
-    current_folder_input = str(st.session_state.get(summary_folder_key, "") or "").strip()
+    current_folder_input = normalize_summary_folder_path(st.session_state.get(summary_folder_key, ""))
 
     path_options: list[str] = []
     for candidate in [current_folder_input, saved_path, *seen_map.keys()]:
-        candidate_text = str(candidate or "").strip()
+        candidate_text = normalize_summary_folder_path(candidate)
         if candidate_text and candidate_text not in path_options:
             path_options.append(candidate_text)
 
@@ -2583,7 +2619,7 @@ def _render_update_summary_form(project_id: str) -> None:
     st.caption("阈值越小越敏感，更容易触发预警；阈值越大越宽松，只提示明显落后的任务。")
 
     # ── Incremental-read hint ───────────────────────────────────────────────
-    folder_preview = (summary_folder or "").strip() or saved_path
+    folder_preview = normalize_summary_folder_path((summary_folder or "").strip() or saved_path)
     if folder_preview and folder_preview in seen_map and seen_map[folder_preview]:
         prev_files = seen_map[folder_preview]
         st.caption(
@@ -2595,7 +2631,7 @@ def _render_update_summary_form(project_id: str) -> None:
         st.caption("首次读取该文件夹时会处理全部文件；之后再次读取同一文件夹时，只会处理新增文件，跳过上次已处理的文件。")
 
     if st.button("更新任务状态", key="do_update_summary_btn"):
-        folder = (summary_folder or "").strip()
+        folder = normalize_summary_folder_path(summary_folder)
         if not folder:
             st.warning("请先输入总结文件夹路径。")
         else:
@@ -2630,9 +2666,11 @@ def _render_update_summary_form(project_id: str) -> None:
                     # Mirror persisted state into current session.
                     st.session_state[saved_key] = folder
                     st.session_state[seen_key] = seen_map
+                    st.session_state[summary_folder_key] = folder
                     st.rerun()
                 elif status == "no_new_summaries":
                     st.session_state[saved_key] = folder
+                    st.session_state[summary_folder_key] = folder
                     latest_result = st.session_state.get("summary_update_result")
                     latest_result_for_project = (
                         latest_result

@@ -14,6 +14,40 @@ except Exception:  # pragma: no cover - graceful fallback when dependency is mis
 _TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".log", ".json", ".docx", ".pdf", ".xlsx", ".doc"}
 
 
+def normalize_summary_folder_path(folder) -> str:
+    folder_text = str(folder or "").strip()
+    if not folder_text:
+        return ""
+
+    try:
+        folder_path = Path(folder_text).expanduser()
+    except (OSError, RuntimeError, ValueError):
+        return folder_text
+
+    try:
+        return str(folder_path.resolve(strict=False))
+    except OSError:
+        return str(folder_path)
+
+
+def _resolve_summary_folder_path(folder) -> Path | None:
+    normalized = normalize_summary_folder_path(folder)
+    if not normalized:
+        return None
+
+    try:
+        return Path(normalized)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _xml_local_name(tag) -> str:
+    text = str(tag or "")
+    if "}" in text:
+        return text.rsplit("}", 1)[-1]
+    return text
+
+
 def _looks_binary(raw_bytes: bytes) -> bool:
     if not raw_bytes:
         return False
@@ -59,11 +93,22 @@ def _read_docx_file(file_path: Path) -> str:
     except ET.ParseError:
         return ""
 
-    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
     paragraphs: list[str] = []
-    for para in root.findall(".//w:p", ns):
-        texts = [node.text for node in para.findall(".//w:t", ns) if node.text]
-        line = "".join(texts).strip()
+    for para in root.iter():
+        if _xml_local_name(getattr(para, "tag", "")) != "p":
+            continue
+
+        parts: list[str] = []
+        for node in para.iter():
+            local_name = _xml_local_name(getattr(node, "tag", ""))
+            if local_name == "t" and node.text:
+                parts.append(node.text)
+            elif local_name == "tab":
+                parts.append("\t")
+            elif local_name in {"br", "cr"}:
+                parts.append("\n")
+
+        line = "".join(parts).strip()
         if line:
             paragraphs.append(line)
 
@@ -326,8 +371,8 @@ def _read_pdf_file(file_path: Path) -> str:
 
 def load_summaries_with_names(folder) -> list[tuple[str, str]]:
     """Return list of (relative_filename, content) for all readable summary files."""
-    folder_path = Path(folder)
-    if not folder_path.exists() or not folder_path.is_dir():
+    folder_path = _resolve_summary_folder_path(folder)
+    if folder_path is None or not folder_path.exists() or not folder_path.is_dir():
         return []
 
     results: list[tuple[str, str]] = []
