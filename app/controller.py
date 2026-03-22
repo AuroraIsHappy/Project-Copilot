@@ -1877,7 +1877,7 @@ def update_tasks_from_summaries(
     }
 
 
-_ASSISTANT_ALLOWED_FIELDS = {"progress", "status", "owner", "duration_days", "task"}
+_ASSISTANT_ALLOWED_FIELDS = {"progress", "status", "owner", "duration_days", "task", "start_week", "end_week"}
 _ASSISTANT_ALLOWED_STATUSES = {"Planned", "In Progress", "Done", "At Risk"}
 _ALLOWED_DEP_TYPES = {"FS", "SS", "FF", "SF"}
 _MEMORY_HINT_TOKENS = (
@@ -1984,11 +1984,72 @@ def _compact_tasks(tasks: list[dict], limit: int = 40) -> list[dict]:
                 "status": task.get("status", "Planned"),
                 "progress": int(task.get("progress", 0) or 0),
                 "duration_days": int(task.get("duration_days", 7) or 7),
+                "start_week": task.get("start_week"),
                 "start": str(task.get("start", "")),
                 "end": str(task.get("end", "")),
             }
         )
     return compact
+
+
+def _format_schedule_window(start_week: int | None, end_week: int | None = None, duration_days: int | None = None) -> str:
+    if start_week is None:
+        return ""
+
+    try:
+        normalized_start = max(1, int(start_week))
+    except (TypeError, ValueError):
+        return ""
+
+    normalized_end = None
+    if end_week is not None:
+        try:
+            normalized_end = max(normalized_start, int(end_week))
+        except (TypeError, ValueError):
+            normalized_end = None
+    elif duration_days is not None:
+        try:
+            weeks = max(1, (int(duration_days) + 6) // 7)
+            normalized_end = normalized_start + weeks - 1
+        except (TypeError, ValueError):
+            normalized_end = None
+
+    if normalized_end is None:
+        return f"W{normalized_start}"
+    return f"W{normalized_start}-W{normalized_end}"
+
+
+def _updates_schedule_window_label(updates: dict) -> str:
+    if not isinstance(updates, dict):
+        return ""
+    return _format_schedule_window(
+        updates.get("start_week"),
+        updates.get("end_week"),
+        updates.get("duration_days"),
+    )
+
+
+def _format_task_update_items(display_updates: dict) -> list[str]:
+    if not isinstance(display_updates, dict):
+        return []
+
+    items: list[str] = []
+    schedule_label = _updates_schedule_window_label(display_updates)
+    if schedule_label:
+        items.append(f"schedule={schedule_label}")
+
+    for key, value in display_updates.items():
+        if key in {"start_week", "end_week"}:
+            continue
+        items.append(f"{key}={value}")
+
+    return items
+
+
+def _has_schedule_update_fields(updates: dict) -> bool:
+    if not isinstance(updates, dict):
+        return False
+    return any(key in updates for key in {"duration_days", "start_week", "end_week"})
 
 
 def _pick_summary_snippets(question: str, summaries_folder: str, max_files: int = 10, max_chars: int = 1200) -> list[dict]:
@@ -2901,6 +2962,11 @@ def _sanitize_update_fields(fields: dict) -> tuple[dict, str | None]:
                 cleaned[normalized_key] = max(1, int(value))
             except (TypeError, ValueError):
                 return {}, "duration_days 必须是正整数。"
+        elif normalized_key in {"start_week", "end_week"}:
+            try:
+                cleaned[normalized_key] = max(1, int(value))
+            except (TypeError, ValueError):
+                return {}, f"{normalized_key} 必须是大于等于 1 的整数。"
         elif normalized_key == "status":
             status = str(value or "").strip()
             if status not in _ASSISTANT_ALLOWED_STATUSES:
@@ -2915,9 +2981,45 @@ def _sanitize_update_fields(fields: dict) -> tuple[dict, str | None]:
             cleaned[normalized_key] = task_name
 
     if not cleaned:
-        return {}, "未识别到可修改字段（支持 task/progress/status/owner/duration_days）。"
+        return {}, "未识别到可修改字段（支持 task/progress/status/owner/duration_days/start_week/end_week）。"
 
     return cleaned, None
+
+
+def _apply_task_updates(task: dict, updates: dict) -> tuple[dict, str | None]:
+    if not isinstance(updates, dict):
+        return {}, "字段格式无效。"
+
+    remaining_updates = dict(updates)
+    duration_days_value = remaining_updates.pop("duration_days", None) if "duration_days" in remaining_updates else None
+    start_week_value = remaining_updates.pop("start_week", None) if "start_week" in remaining_updates else None
+    end_week_value = remaining_updates.pop("end_week", None) if "end_week" in remaining_updates else None
+
+    if end_week_value is not None:
+        if start_week_value is None:
+            if duration_days_value is None:
+                return {}, "end_week 需要与 start_week 一起提供，或同时给出 duration_days。"
+            duration_weeks = max(1, (int(duration_days_value) + 6) // 7)
+            start_week_value = max(1, int(end_week_value) - duration_weeks + 1)
+        if int(end_week_value) < int(start_week_value):
+            return {}, "end_week 不能早于 start_week。"
+        duration_days_value = (int(end_week_value) - int(start_week_value) + 1) * 7
+
+    task.update(remaining_updates)
+    if duration_days_value is not None:
+        _set_task_duration_days(task, int(duration_days_value))
+    if start_week_value is not None:
+        task["start_week"] = max(1, int(start_week_value))
+
+    display_updates = dict(remaining_updates)
+    if start_week_value is not None:
+        display_updates["start_week"] = max(1, int(start_week_value))
+    if end_week_value is not None:
+        display_updates["end_week"] = max(display_updates.get("start_week", 1), int(end_week_value))
+    elif duration_days_value is not None and "duration_days" in updates:
+        display_updates["duration_days"] = int(duration_days_value)
+
+    return display_updates, None
 
 
 def _try_parse_direct_task_rename(text: str) -> dict | None:
@@ -3070,6 +3172,55 @@ def _try_parse_direct_duration_extend(text: str) -> dict | None:
     return {"task_id": task_id, "delta_days": delta_days}
 
 
+def _parse_week_range(text: str) -> tuple[int, int] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    patterns = [
+        r"[Ww]\s*(\d+)\s*(?:-|到|至|~|～)\s*[Ww]\s*(\d+)",
+        r"[Ww]\s*(\d+)\s*(?:-|到|至|~|～)\s*(\d+)",
+        r"第?\s*(\d+)\s*周\s*(?:-|到|至|~|～)\s*第?\s*(\d+)\s*周",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            start_week = max(1, int(match.group(1)))
+            end_week = max(1, int(match.group(2)))
+        except (TypeError, ValueError):
+            continue
+        if end_week < start_week:
+            continue
+        return start_week, end_week
+    return None
+
+
+def _try_parse_direct_schedule_window_change(text: str) -> dict | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    patterns = [
+        rf"(?:把|将)?\s*{_TASK_REF_TOKEN_PATTERN}\s*(?:的)?(?:排期|时间安排|时间|起止时间|起止|计划)\s*(?:改为|改成|调整为|调整到|排到|安排到|挪到|移到)\s*(.+)$",
+        rf"(?:把|将)?\s*{_TASK_REF_TOKEN_PATTERN}\s*(?:排到|安排到|挪到|移到)\s*(.+)$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        task_id = _normalize_task_ref_text(match.group(1))
+        week_range = _parse_week_range(match.group(2))
+        if task_id and week_range:
+            return {
+                "task_id": task_id,
+                "start_week": week_range[0],
+                "end_week": week_range[1],
+            }
+    return None
+
+
 def _split_compound_clauses(text: str) -> list[str]:
     raw = (text or "").strip()
     if not raw:
@@ -3090,6 +3241,22 @@ def _parse_compound_operations(text: str) -> list[dict]:
         extend = _try_parse_direct_duration_extend(clause)
         if extend:
             operations.append({"kind": "task_extend", **extend, "need_reschedule": True})
+            continue
+
+        schedule_change = _try_parse_direct_schedule_window_change(clause)
+        if schedule_change:
+            operations.append(
+                {
+                    "kind": "task_update",
+                    "task_id": schedule_change["task_id"],
+                    "task_name": "",
+                    "updates": {
+                        "start_week": schedule_change["start_week"],
+                        "end_week": schedule_change["end_week"],
+                    },
+                    "need_reschedule": True,
+                }
+            )
             continue
 
         rename = _try_parse_direct_task_rename(clause)
@@ -3144,7 +3311,12 @@ def _summarize_operations(operations: list[dict]) -> str:
             lines.append(f"- 删除任务：{target}")
         elif kind == "task_update":
             target = str(op.get("task_id") or op.get("task_name") or "")
-            lines.append(f"- 修改任务：{target}，updates={op.get('updates', {})}")
+            updates = op.get("updates", {}) if isinstance(op.get("updates"), dict) else {}
+            schedule_label = _updates_schedule_window_label(updates)
+            if schedule_label:
+                lines.append(f"- 修改任务排期：{target}，{schedule_label}")
+            else:
+                lines.append(f"- 修改任务：{target}，updates={updates}")
         elif kind == "task_extend":
             lines.append(f"- 延长工期：{op.get('task_id', '')}，+{op.get('delta_days', 0)}天")
         elif kind == "dependency_update":
@@ -3302,17 +3474,14 @@ def _apply_operation_on_snapshot(tasks: list[dict], dependencies: list[dict], op
         return tasks, dependencies, "", False, err
 
     old_task = dict(tasks[idx])
-    display_updates = dict(updates)
+    display_updates, apply_err = _apply_task_updates(tasks[idx], updates)
+    if apply_err:
+        return tasks, dependencies, "", False, apply_err
 
-    duration_days_value = updates.pop("duration_days", None) if "duration_days" in updates else None
-    tasks[idx].update(updates)
-    if duration_days_value is not None:
-        _set_task_duration_days(tasks[idx], int(duration_days_value))
-
-    needs_reschedule = bool(operation.get("need_reschedule")) or (duration_days_value is not None)
+    needs_reschedule = bool(operation.get("need_reschedule")) or _has_schedule_update_fields(updates)
     summary = (
         f"已修改任务 {old_task.get('task_id')} ({old_task.get('task')})："
-        + ", ".join([f"{k}={display_updates[k]}" for k in display_updates])
+        + ", ".join(_format_task_update_items(display_updates))
     )
     return tasks, dependencies, summary, needs_reschedule, None
 
@@ -3613,20 +3782,18 @@ def _apply_pending_change(project_id: str, pending: dict) -> dict:
         return {"status": "error", "message": err}
 
     old_task = dict(tasks[idx])
-    display_updates = dict(updates)
-    duration_days_value = updates.pop("duration_days", None) if "duration_days" in updates else None
-    tasks[idx].update(updates)
-    if duration_days_value is not None:
-        _set_task_duration_days(tasks[idx], int(duration_days_value))
+    display_updates, apply_err = _apply_task_updates(tasks[idx], updates)
+    if apply_err:
+        return {"status": "error", "message": apply_err}
 
-    needs_reschedule = bool(pending.get("need_reschedule")) or (duration_days_value is not None)
+    needs_reschedule = bool(pending.get("need_reschedule")) or _has_schedule_update_fields(updates)
     final_tasks = schedule_tasks(tasks, dependencies=dependencies) if needs_reschedule else tasks
 
     save_tasks(final_tasks, project_id, dependencies=dependencies)
 
     summary = (
         f"已修改任务 {old_task.get('task_id')} ({old_task.get('task')})："
-        + ", ".join([f"{k}={display_updates[k]}" for k in display_updates])
+        + ", ".join(_format_task_update_items(display_updates))
         + ("；并已重新排期。" if needs_reschedule else "。")
     )
 
@@ -3928,13 +4095,13 @@ def _build_assistant_system_prompt(
         "new_task_name": "新增任务名（action=add时可用）",
         "duration_days": 7,
         "owner": "Unassigned",
-        "updates": {{"task": "新任务名", "progress": 80, "status": "In Progress", "owner": "Alice", "duration_days": 10}},
+                "updates": {{"task": "新任务名", "progress": 80, "status": "In Progress", "owner": "Alice", "duration_days": 10, "start_week": 7, "end_week": 8}},
     "need_reschedule": true | false
   }},
     "operations": [
         {{"kind": "task_add", "task": "...", "duration_days": 7, "owner": "Unassigned", "need_reschedule": true}},
         {{"kind": "dependency_update", "dependency_change": {{"action": "add", "from": "T2", "to": "T7", "type": "FS", "lag_weeks": 0, "overlap_weeks": 0}}}},
-        {{"kind": "task_update", "task_id": "T9", "updates": {{"duration_days": 21}}, "need_reschedule": true}}
+                {{"kind": "task_update", "task_id": "T9", "updates": {{"start_week": 7, "end_week": 8}}, "need_reschedule": true}}
     ],
     "dependency_change": {{
         "action": "add" | "remove" | "update",
@@ -3948,13 +4115,14 @@ def _build_assistant_system_prompt(
 }}
 
 约束：
-- 仅允许修改字段 task/progress/status/owner/duration_days。
+- 仅允许修改字段 task/progress/status/owner/duration_days/start_week/end_week。
 - status 仅能取 Planned/In Progress/Done/At Risk。
 - intent=change 且 action=update/delete 时，change 必须给出 task_id 或 task_name。
 - intent=change 且 action=add 时，必须给出 new_task_name（或 updates.task）与 duration_days。
 - 若用户要求改依赖，请优先使用 dependency_change，不要放到 change。
 - 当用户只是提问，不要生成 change。
 - 若仅是改任务名/负责人/进度/状态，need_reschedule 应为 false。
+- 当用户明确说“改为 W7-W8 / 第7周到第8周”这类排期窗口时，使用 updates.start_week / updates.end_week，并将 need_reschedule 设为 true。
 - 对“新增任务/删除任务”的需求，优先用 change.action=add/delete，不要触发 replan。
 - 当一句话包含多个可执行修改时，优先输出 operations（长度>=2），并保持执行顺序。
 - task_id 同时支持内部编号（如 T9）、界面展示编号（如 2.1）以及带前缀写法（如 任务1.2、task 2.1）。
@@ -4198,6 +4366,43 @@ def assistant_chat(
         reply = (
             f"已生成待执行删除：目标任务={target}。\n\n"
             "这是局部删除任务，不会触发整盘重规划。回复“确认执行”才会落盘，回复“取消执行”可撤销这次修改。"
+        )
+        if memory_note:
+            reply = memory_note + "\n\n" + reply
+        history = history[-29:]
+        history.append({"role": "user", "content": text, "ts": user_ts})
+        history.append({"role": "assistant", "content": reply, "ts": _now_iso()})
+        save_project_assistant_state(project_id, chat_history=history)
+        return {
+            "status": "ok",
+            "reply": reply,
+            "pending_change": pending_change,
+            "executed": False,
+            "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
+        }
+
+    direct_schedule_change = _try_parse_direct_schedule_window_change(text)
+    if direct_schedule_change:
+        pending_change = {
+            "kind": "task_update",
+            "task_id": str(direct_schedule_change.get("task_id", "")).strip(),
+            "task_name": "",
+            "updates": {
+                "start_week": int(direct_schedule_change.get("start_week", 1) or 1),
+                "end_week": int(direct_schedule_change.get("end_week", 1) or 1),
+            },
+            "need_reschedule": True,
+            "requested_at": _now_iso(),
+        }
+        save_project_assistant_state(project_id, pending_change=pending_change)
+        schedule_label = _format_schedule_window(
+            pending_change["updates"].get("start_week"),
+            pending_change["updates"].get("end_week"),
+        )
+        reply = (
+            f"已生成待执行排期修改：目标任务={pending_change['task_id']}，"
+            f"排期改为 {schedule_label}。\n\n"
+            "回复“确认执行”才会落盘并重排期，回复“取消执行”可撤销这次修改。"
         )
         if memory_note:
             reply = memory_note + "\n\n" + reply
@@ -4597,9 +4802,14 @@ def assistant_chat(
         save_project_assistant_state(project_id, pending_change=pending_change)
 
         target = pending_change["task_id"] or pending_change["task_name"] or "(未识别目标任务)"
+        schedule_label = _updates_schedule_window_label(updates)
         preview = (
-            f"已生成待执行修改：目标任务={target}，更新={updates}"
-            + ("，执行后会重排期。" if pending_change["need_reschedule"] or "duration_days" in updates else "。")
+            (
+                f"已生成待执行修改：目标任务={target}，排期改为 {schedule_label}"
+                if schedule_label
+                else f"已生成待执行修改：目标任务={target}，更新={updates}"
+            )
+            + ("，执行后会重排期。" if pending_change["need_reschedule"] or _has_schedule_update_fields(updates) else "。")
             + "\n\n回复“确认执行”才会落盘，回复“取消执行”可撤销这次修改。"
         )
         reply = ((memory_note + "\n\n") if memory_note else "") + ((answer + "\n\n" if answer else "") + preview)

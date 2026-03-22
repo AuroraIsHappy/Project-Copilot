@@ -696,9 +696,16 @@ def _normalize_task(task: dict, index: int) -> dict:
     except (TypeError, ValueError):
         subtask_index = None
 
+    start_week = task.get("start_week")
+    try:
+        start_week = max(1, int(start_week)) if start_week is not None and str(start_week).strip() != "" else None
+    except (TypeError, ValueError):
+        start_week = None
+
     return {
         "task_id": task_id,
         "task": name,
+        "start_week": start_week,
         "start": task.get("start", ""),
         "end": task.get("end", ""),
         "duration": duration,

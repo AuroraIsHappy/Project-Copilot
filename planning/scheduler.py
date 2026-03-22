@@ -45,6 +45,15 @@ def _duration_days(task: dict) -> int:
     return weeks * 7
 
 
+def _manual_start_offset_days(task: dict) -> int:
+    raw_start_week = task.get("start_week")
+    try:
+        start_week = int(raw_start_week)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, start_week - 1) * 7
+
+
 def _constraint_weight(dep: dict, duration_a: int, duration_b: int) -> int:
     dep_type = str(dep.get("type") or "FS").upper().strip()
 
@@ -85,13 +94,15 @@ def _sequential_schedule(tasks: list[dict], start_date: date) -> list[dict]:
     for index, task in enumerate(tasks, start=1):
         days = _duration_days(task)
         duration_weeks = max(1, days // 7)
-        end = cursor + timedelta(days=days)
+        manual_start = start_date + timedelta(days=_manual_start_offset_days(task))
+        task_start = max(cursor, manual_start)
+        end = task_start + timedelta(days=days)
         scheduled_task = dict(task)
         scheduled_task.update(
             {
                 "task_id": _task_id(task, index),
                 "task": task.get("task") or task.get("task_name") or task.get("name") or f"Task {index}",
-                "start": cursor,
+                "start": task_start,
                 "end": end,
                 "duration_days": days,
                 "duration_weeks": duration_weeks,
@@ -127,7 +138,7 @@ def _dependency_schedule(tasks: list[dict], dependencies: list[dict], start_date
         weight = _constraint_weight(dep, durations[source], durations[target])
         constraints.append((source, target, weight))
 
-    starts = {tid: 0 for tid in task_ids}
+    starts = {tid: _manual_start_offset_days(tasks[id_to_index[tid]]) for tid in task_ids}
     task_count = len(task_ids)
     updated = False
 
