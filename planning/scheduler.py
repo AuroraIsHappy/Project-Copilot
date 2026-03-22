@@ -54,6 +54,16 @@ def _manual_start_offset_days(task: dict) -> int:
     return max(0, start_week - 1) * 7
 
 
+def _has_manual_start_week(task: dict) -> bool:
+    raw_start_week = task.get("start_week")
+    if raw_start_week is None:
+        return False
+    try:
+        return int(raw_start_week) >= 1
+    except (TypeError, ValueError):
+        return False
+
+
 def _constraint_weight(dep: dict, duration_a: int, duration_b: int) -> int:
     dep_type = str(dep.get("type") or "FS").upper().strip()
 
@@ -94,8 +104,10 @@ def _sequential_schedule(tasks: list[dict], start_date: date) -> list[dict]:
     for index, task in enumerate(tasks, start=1):
         days = _duration_days(task)
         duration_weeks = max(1, days // 7)
-        manual_start = start_date + timedelta(days=_manual_start_offset_days(task))
-        task_start = max(cursor, manual_start)
+        if _has_manual_start_week(task):
+            task_start = start_date + timedelta(days=_manual_start_offset_days(task))
+        else:
+            task_start = cursor
         end = task_start + timedelta(days=days)
         scheduled_task = dict(task)
         scheduled_task.update(
@@ -113,7 +125,7 @@ def _sequential_schedule(tasks: list[dict], start_date: date) -> list[dict]:
             }
         )
         result.append(scheduled_task)
-        cursor = end
+        cursor = max(cursor, end)
 
     return result
 
@@ -138,7 +150,14 @@ def _dependency_schedule(tasks: list[dict], dependencies: list[dict], start_date
         weight = _constraint_weight(dep, durations[source], durations[target])
         constraints.append((source, target, weight))
 
-    starts = {tid: _manual_start_offset_days(tasks[id_to_index[tid]]) for tid in task_ids}
+    pinned_task_ids = {
+        tid for tid in task_ids
+        if _has_manual_start_week(tasks[id_to_index[tid]])
+    }
+    starts = {
+        tid: _manual_start_offset_days(tasks[id_to_index[tid]]) if tid in pinned_task_ids else 0
+        for tid in task_ids
+    }
     task_count = len(task_ids)
     updated = False
 
@@ -146,6 +165,8 @@ def _dependency_schedule(tasks: list[dict], dependencies: list[dict], start_date
         updated = False
         for source, target, weight in constraints:
             candidate = starts[source] + weight
+            if target in pinned_task_ids:
+                continue
             if starts[target] < candidate:
                 starts[target] = candidate
                 updated = True
