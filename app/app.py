@@ -2575,6 +2575,11 @@ def _render_update_summary_form(project_id: str) -> None:
     summary_folder_key = f"summary_folder_input_{project_id}"
     if summary_folder_key not in st.session_state:
         st.session_state[summary_folder_key] = saved_path
+    else:
+        raw_folder_input = str(st.session_state.get(summary_folder_key, "") or "").strip()
+        normalized_folder_input = normalize_summary_folder_path(raw_folder_input)
+        if raw_folder_input and normalized_folder_input and normalized_folder_input != raw_folder_input:
+            st.session_state[summary_folder_key] = normalized_folder_input
 
     current_folder_input = normalize_summary_folder_path(st.session_state.get(summary_folder_key, ""))
 
@@ -2666,11 +2671,9 @@ def _render_update_summary_form(project_id: str) -> None:
                     # Mirror persisted state into current session.
                     st.session_state[saved_key] = folder
                     st.session_state[seen_key] = seen_map
-                    st.session_state[summary_folder_key] = folder
                     st.rerun()
                 elif status == "no_new_summaries":
                     st.session_state[saved_key] = folder
-                    st.session_state[summary_folder_key] = folder
                     latest_result = st.session_state.get("summary_update_result")
                     latest_result_for_project = (
                         latest_result

@@ -2774,9 +2774,36 @@ def _build_global_risk_focus_reply(*, top_items: int = _GLOBAL_RISK_TOP_ITEMS) -
 
     return "\n".join(lines)
 
+_TASK_REF_CORE_PATTERN = r"(?:T\d+|\d+\.\d+)"
+_TASK_REF_TOKEN_PATTERN = r"((?:(?:第\s*)?(?:任务|task)\s*)?(?:T\d+|\d+\.\d+)(?:\s*(?:个)?(?:任务|task))?)"
+
+
+def _normalize_task_ref_text(ref: str | None) -> str:
+    normalized = str(ref or "").strip()
+    if not normalized:
+        return ""
+
+    normalized = normalized.strip("：:，,。；;（）()[]【】")
+    for _ in range(3):
+        updated = normalized
+        updated = re.sub(r"^(?:第\s*)?(?:任务|task)\s*", "", updated, flags=re.IGNORECASE)
+        updated = re.sub(r"^第\s*", "", updated)
+        updated = re.sub(r"\s*(?:个)?(?:任务|task)\s*$", "", updated, flags=re.IGNORECASE)
+        updated = updated.strip().strip("：:，,。；;（）()[]【】")
+        if updated == normalized:
+            break
+        normalized = updated
+
+    compact = re.sub(r"\s+", "", normalized)
+    if re.fullmatch(r"\d+\.\d+", compact):
+        return compact
+    if re.fullmatch(r"(?i)T\d+", compact):
+        return compact.upper()
+    return normalized
+
 
 def _parse_display_ref(ref: str) -> tuple[int, int] | None:
-    raw = str(ref or "").strip()
+    raw = _normalize_task_ref_text(ref)
     match = re.match(r"^(\d+)\.(\d+)$", raw)
     if not match:
         return None
@@ -2808,10 +2835,13 @@ def _resolve_task_id_ref(tasks: list[dict], ref: str | None) -> str:
     if not raw:
         return ""
 
-    lowered = raw.lower()
+    normalized_raw = _normalize_task_ref_text(raw)
+    lowered_candidates = {raw.lower()}
+    if normalized_raw:
+        lowered_candidates.add(normalized_raw.lower())
     for task in tasks:
         task_id = str(task.get("task_id", "")).strip()
-        if task_id.lower() == lowered:
+        if task_id.lower() in lowered_candidates:
             return task_id
 
     parsed = _parse_display_ref(raw)
@@ -2820,7 +2850,7 @@ def _resolve_task_id_ref(tasks: list[dict], ref: str | None) -> str:
         if mapped:
             return mapped
 
-    return raw
+    return normalized_raw or raw
 
 
 def _find_task_index(tasks: list[dict], task_id: str | None, task_name: str | None) -> int:
@@ -2896,14 +2926,14 @@ def _try_parse_direct_task_rename(text: str) -> dict | None:
         return None
 
     patterns = [
-        r"(?:把|将)\s*((?:T\d+|\d+\.\d+))\s*(?:任务)?\s*(?:改为|改成|改名为|命名为)\s*[：: ]?(.+)$",
-        r"^((?:T\d+|\d+\.\d+))\s*(?:任务)?\s*(?:改为|改成|改名为|命名为)\s*[：: ]?(.+)$",
+        rf"(?:把|将)\s*{_TASK_REF_TOKEN_PATTERN}\s*(?:改为|改成|改名为|命名为)\s*[：: ]?(.+)$",
+        rf"^{_TASK_REF_TOKEN_PATTERN}\s*(?:改为|改成|改名为|命名为)\s*[：: ]?(.+)$",
     ]
     for pattern in patterns:
         match = re.search(pattern, raw, flags=re.IGNORECASE)
         if not match:
             continue
-        task_id = str(match.group(1) or "").strip().upper()
+        task_id = _normalize_task_ref_text(match.group(1))
         new_name = str(match.group(2) or "").strip().strip("。；;！!")
         if task_id and new_name:
             return {"task_id": task_id, "new_name": new_name}
@@ -2950,14 +2980,14 @@ def _try_parse_direct_task_delete(text: str) -> dict | None:
     if not raw:
         return None
 
-    id_match = re.search(r"(?:删除|移除|去掉)\s*((?:T\d+|\d+\.\d+))\s*(?:任务)?", raw, flags=re.IGNORECASE)
+    id_match = re.search(rf"(?:删除|移除|去掉)\s*{_TASK_REF_TOKEN_PATTERN}", raw, flags=re.IGNORECASE)
     if id_match:
-        return {"task_id": str(id_match.group(1) or "").strip().upper()}
+        return {"task_id": _normalize_task_ref_text(id_match.group(1))}
 
     name_match = re.search(r"(?:删除|移除|去掉)\s*(?:任务)?\s*[：: ]?(.+)$", raw, flags=re.IGNORECASE)
     if name_match:
         task_name = str(name_match.group(1) or "").strip().strip("。；;！!")
-        if task_name and not re.match(r"^(?:T\d+|\d+\.\d+)$", task_name, flags=re.IGNORECASE):
+        if task_name and not re.match(rf"^{_TASK_REF_TOKEN_PATTERN}$", task_name, flags=re.IGNORECASE):
             return {"task_name": task_name}
     return None
 
@@ -3004,11 +3034,11 @@ def _try_parse_direct_dependency_change(text: str) -> dict | None:
     raw = (text or "").strip()
     if not raw:
         return None
-    match = re.search(r"((?:T\d+|\d+\.\d+))\s*依赖\s*((?:T\d+|\d+\.\d+))", raw, flags=re.IGNORECASE)
+    match = re.search(rf"{_TASK_REF_TOKEN_PATTERN}\s*依赖\s*{_TASK_REF_TOKEN_PATTERN}", raw, flags=re.IGNORECASE)
     if not match:
         return None
-    dependent = str(match.group(1) or "").strip().upper()
-    prerequisite = str(match.group(2) or "").strip().upper()
+    dependent = _normalize_task_ref_text(match.group(1))
+    prerequisite = _normalize_task_ref_text(match.group(2))
     if not dependent or not prerequisite or dependent == prerequisite:
         return None
     return {
@@ -3025,12 +3055,12 @@ def _try_parse_direct_duration_extend(text: str) -> dict | None:
     raw = (text or "").strip()
     if not raw:
         return None
-    pattern = r"(?:把|将)?\s*((?:T\d+|\d+\.\d+))\s*(?:的)?(?:时间|工期|时长|排期|duration)?\s*延长\s*([一二两三四五六七八九十\d]+)\s*(天|周)"
+    pattern = rf"(?:把|将)?\s*{_TASK_REF_TOKEN_PATTERN}\s*(?:的)?(?:时间|工期|时长|排期|duration)?\s*延长\s*([一二两三四五六七八九十\d]+)\s*(天|周)"
     match = re.search(pattern, raw, flags=re.IGNORECASE)
     if not match:
         return None
 
-    task_id = str(match.group(1) or "").strip().upper()
+    task_id = _normalize_task_ref_text(match.group(1))
     amount = _parse_cn_number(str(match.group(2) or "").strip())
     unit = str(match.group(3) or "天").strip()
     if not task_id or amount is None or amount <= 0:
@@ -3295,8 +3325,8 @@ def _sanitize_dependency_change(change: dict) -> tuple[dict, str | None]:
     if action not in {"add", "remove", "update"}:
         return {}, "dependency_change.action 仅支持 add/remove/update。"
 
-    source = str(change.get("from", "")).strip()
-    target = str(change.get("to", "")).strip()
+    source = _normalize_task_ref_text(change.get("from"))
+    target = _normalize_task_ref_text(change.get("to"))
     if not source or not target:
         return {}, "dependency_change 需要 from/to 任务 ID。"
     if source == target:
@@ -3927,7 +3957,7 @@ def _build_assistant_system_prompt(
 - 若仅是改任务名/负责人/进度/状态，need_reschedule 应为 false。
 - 对“新增任务/删除任务”的需求，优先用 change.action=add/delete，不要触发 replan。
 - 当一句话包含多个可执行修改时，优先输出 operations（长度>=2），并保持执行顺序。
-- task_id 同时支持内部编号（如 T9）和界面展示编号（如 2.1）。
+- task_id 同时支持内部编号（如 T9）、界面展示编号（如 2.1）以及带前缀写法（如 任务1.2、task 2.1）。
 
 当前任务列表：
 {json.dumps(_compact_tasks(tasks), ensure_ascii=False)}
@@ -4276,10 +4306,58 @@ def assistant_chat(
             if not isinstance(op, dict):
                 continue
             kind = str(op.get("kind", "")).strip().lower()
-            if kind in {"task_add", "task_delete", "task_update", "task_extend"}:
-                normalized_ops.append(op)
+            if kind == "task_add":
+                try:
+                    duration_days = max(1, int(op.get("duration_days", 7) or 7))
+                except (TypeError, ValueError):
+                    duration_days = 7
+                normalized_ops.append(
+                    {
+                        "kind": "task_add",
+                        "task": str(op.get("task", "")).strip(),
+                        "duration_days": duration_days,
+                        "owner": str(op.get("owner", "Unassigned") or "Unassigned").strip() or "Unassigned",
+                        "need_reschedule": bool(op.get("need_reschedule", True)),
+                    }
+                )
+            elif kind == "task_delete":
+                normalized_ops.append(
+                    {
+                        "kind": "task_delete",
+                        "task_id": _normalize_task_ref_text(op.get("task_id")),
+                        "task_name": str(op.get("task_name", "")).strip(),
+                        "need_reschedule": bool(op.get("need_reschedule", True)),
+                    }
+                )
+            elif kind == "task_update":
+                normalized_ops.append(
+                    {
+                        "kind": "task_update",
+                        "task_id": _normalize_task_ref_text(op.get("task_id")),
+                        "task_name": str(op.get("task_name", "")).strip(),
+                        "updates": op.get("updates", {}) if isinstance(op.get("updates"), dict) else {},
+                        "need_reschedule": bool(op.get("need_reschedule", False)),
+                    }
+                )
+            elif kind == "task_extend":
+                try:
+                    delta_days = int(op.get("delta_days", 0) or 0)
+                except (TypeError, ValueError):
+                    delta_days = 0
+                normalized_ops.append(
+                    {
+                        "kind": "task_extend",
+                        "task_id": _normalize_task_ref_text(op.get("task_id")),
+                        "task_name": str(op.get("task_name", "")).strip(),
+                        "delta_days": delta_days,
+                        "need_reschedule": bool(op.get("need_reschedule", True)),
+                    }
+                )
             elif kind == "dependency_update" and isinstance(op.get("dependency_change"), dict):
-                normalized_ops.append(op)
+                dep_change = dict(op.get("dependency_change") or {})
+                dep_change["from"] = _normalize_task_ref_text(dep_change.get("from"))
+                dep_change["to"] = _normalize_task_ref_text(dep_change.get("to"))
+                normalized_ops.append({"kind": "dependency_update", "dependency_change": dep_change})
         if len(normalized_ops) >= 2:
             pending_change = {
                 "kind": "batch_update",
@@ -4309,7 +4387,7 @@ def assistant_chat(
             op = normalized_ops[0]
             pending_change = {
                 "kind": "task_extend",
-                "task_id": str(op.get("task_id", "")).strip(),
+                "task_id": _normalize_task_ref_text(op.get("task_id")),
                 "task_name": str(op.get("task_name", "")).strip(),
                 "delta_days": int(op.get("delta_days", 0) or 0),
                 "need_reschedule": True,
@@ -4429,8 +4507,11 @@ def assistant_chat(
             }
 
         if change_action in {"delete", "remove"}:
-            task_id = str(change.get("task_id", "")).strip()
+            task_id = _normalize_task_ref_text(change.get("task_id"))
             task_name = str(change.get("task_name", "")).strip()
+            if not task_id and task_name and re.fullmatch(rf"{_TASK_REF_TOKEN_PATTERN}", task_name, flags=re.IGNORECASE):
+                task_id = _normalize_task_ref_text(task_name)
+                task_name = ""
             if not task_id and not task_name:
                 reply = "我识别到你要删除任务，但没有定位到目标。请补充任务序号（如 1.3）或完整任务名。"
                 history = history[-29:]
@@ -4486,8 +4567,11 @@ def assistant_chat(
                 "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
             }
 
-        task_id = str(change.get("task_id", "")).strip()
+        task_id = _normalize_task_ref_text(change.get("task_id"))
         task_name = str(change.get("task_name", "")).strip()
+        if not task_id and task_name and re.fullmatch(rf"{_TASK_REF_TOKEN_PATTERN}", task_name, flags=re.IGNORECASE):
+            task_id = _normalize_task_ref_text(task_name)
+            task_name = ""
         if not task_id and not task_name:
             reply = "我识别到你要修改任务，但没有定位到具体任务。请补充 task_id（如 T3）或完整任务名。"
             history = history[-29:]
