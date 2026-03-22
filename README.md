@@ -430,6 +430,7 @@ OKR 文本
 应用左侧边栏提供完整的 `LLM 配置` 面板，支持设置：
 
 - `Provider`
+- `Base URL`（可先选预设，再手动修改）
 - `任务生成模型（Generate Task）`
 - `Assistant 模型`
 - `Progress 模型`
@@ -462,6 +463,7 @@ OKR 文本
 其中：
 
 - fresh clone 后默认不会附带已选中的 Provider；应用会先显示“未配置”状态
+- Base URL 会按所选 Provider 提供默认预设；如果你的接入点不是默认地址，也可以直接手动改写
 - `config.json` 是本地文件，在你第一次保存 LLM 配置后自动生成，并已加入 `.gitignore`
 - `config.example.json` 只提供一个空白示例，不会被运行时直接使用
 - API Key 默认按 Provider 分开保存在系统凭据库中，不写入 `config.json`

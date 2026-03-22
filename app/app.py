@@ -79,6 +79,8 @@ _INSIGHT_SOURCE_LABELS = {
     "reddit": "Reddit",
 }
 
+_LLM_BASE_URL_CUSTOM_OPTION = "__manual__"
+
 
 def inject_styles() -> None:
     st.markdown(
@@ -1021,6 +1023,62 @@ def render_kr_toolbar(tasks: list[dict]) -> dict[str, bool]:
     return dict(st.session_state.kr_expand_state)
 
 
+def _llm_base_url_preset_options(current_spec: dict | None, current_value: str = "") -> list[str]:
+    options: list[str] = []
+
+    if isinstance(current_spec, dict):
+        raw_options = current_spec.get("base_url_options", [])
+        if isinstance(raw_options, list):
+            options.extend(raw_options)
+
+        default_base_url = str(current_spec.get("default_base_url") or "").strip()
+        if default_base_url:
+            options.insert(0, default_base_url)
+
+    configured_value = str(current_value or "").strip()
+    if configured_value:
+        options.append(configured_value)
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_option in options:
+        option = str(raw_option or "").strip()
+        if not option or option in seen:
+            continue
+        seen.add(option)
+        normalized.append(option)
+
+    return normalized
+
+
+def _sync_llm_base_url_state(provider_name: str, current_value: str, preset_options: list[str]) -> None:
+    normalized_provider = str(provider_name or "").strip()
+    normalized_value = str(current_value or "").strip()
+    signature = (normalized_provider, normalized_value, tuple(preset_options))
+
+    if st.session_state.get("_llm_base_url_signature") == signature:
+        return
+
+    st.session_state["_llm_base_url_signature"] = signature
+    st.session_state["llm_base_url_value"] = normalized_value
+    st.session_state["llm_base_url_preset"] = (
+        normalized_value if normalized_value in preset_options else _LLM_BASE_URL_CUSTOM_OPTION
+    )
+
+
+def _apply_llm_base_url_preset() -> None:
+    preset = str(st.session_state.get("llm_base_url_preset") or "").strip()
+    if preset and preset != _LLM_BASE_URL_CUSTOM_OPTION:
+        st.session_state["llm_base_url_value"] = preset
+
+
+def _apply_llm_base_url_value(preset_options: list[str]) -> None:
+    current_value = str(st.session_state.get("llm_base_url_value") or "").strip()
+    st.session_state["llm_base_url_preset"] = (
+        current_value if current_value in preset_options else _LLM_BASE_URL_CUSTOM_OPTION
+    )
+
+
 def render_llm_settings() -> None:
     with st.sidebar.expander("LLM 配置", expanded=False):
         cfg = load_llm_config()
@@ -1049,7 +1107,7 @@ def render_llm_settings() -> None:
                     switched_spec["default_progress_model"],
                     switched_spec["default_assistant_model"],
                 )
-                st.success("已切换 Provider，Base URL 已自动更新。")
+                st.success("已切换 Provider，请确认 Base URL 与模型配置。")
             else:
                 reset_llm_config()
                 st.success("已重置为未配置状态。")
@@ -1058,9 +1116,34 @@ def render_llm_settings() -> None:
         selected_provider = provider or cfg["provider"]
         current_spec = provider_specs.get(selected_provider)
         if current_spec:
-            st.caption(f"Auto Base URL: {cfg['base_url']}")
+            base_url_presets = _llm_base_url_preset_options(current_spec, cfg.get("base_url", ""))
+            _sync_llm_base_url_state(selected_provider, cfg.get("base_url", ""), base_url_presets)
+
+            if base_url_presets:
+                preset_options = [_LLM_BASE_URL_CUSTOM_OPTION] + base_url_presets
+                if st.session_state.get("llm_base_url_preset") not in preset_options:
+                    st.session_state["llm_base_url_preset"] = _LLM_BASE_URL_CUSTOM_OPTION
+
+                st.selectbox(
+                    "Base URL 预设",
+                    options=preset_options,
+                    format_func=lambda value: "手动输入 / 自定义 URL" if value == _LLM_BASE_URL_CUSTOM_OPTION else value,
+                    key="llm_base_url_preset",
+                    on_change=_apply_llm_base_url_preset,
+                )
+            else:
+                st.caption("该 Provider 没有通用 Base URL 预设，请手动填写。")
+
+            st.text_input(
+                "Base URL",
+                key="llm_base_url_value",
+                placeholder="https://...",
+                help="可直接修改；如果先选择上面的预设，输入框会自动带入该值。",
+                on_change=_apply_llm_base_url_value,
+                args=(base_url_presets,),
+            )
         else:
-            st.caption("Auto Base URL: 选择 Provider 后自动填充")
+            st.caption("Base URL 预设：选择 Provider 后显示")
             st.info("当前还没有选择 Provider。首次使用请先选择 Provider，再填写模型与 API Key。")
 
         with st.form("llm_config_form"):
@@ -1121,10 +1204,11 @@ def render_llm_settings() -> None:
         if submitted:
             save_error = ""
             try:
+                selected_base_url = str(st.session_state.get("llm_base_url_value") or "").strip()
                 save_ok = save_llm_config(
                     selected_provider,
                     task_generation_model,
-                    current_spec["default_base_url"],
+                    selected_base_url,
                     int(max_tokens),
                     int(progress_max_workers),
                     int(progress_llm_max_output_tokens),
@@ -1155,6 +1239,7 @@ def render_llm_settings() -> None:
         if cfg.get("is_configured"):
             state_label = "已保存" if cfg["has_api_key"] else "未保存"
             st.caption(f"API Key 状态: {state_label}")
+            st.caption(f"Base URL: {cfg['base_url'] or '未设置'}")
             st.caption(f"任务生成模型: {cfg['model']}")
             st.caption(f"Max Tokens: {cfg['max_tokens']}")
             st.caption(f"Assistant 模型: {cfg.get('assistant_model', cfg['model'])}")

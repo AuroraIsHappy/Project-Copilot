@@ -31,6 +31,12 @@ PROVIDER_REGISTRY = {
     "custom": {
         "label": "Custom (OpenAI-Compatible)",
         "default_base_url": "https://openrouter.ai/api/v1",
+        "base_url_options": [
+            "https://openrouter.ai/api/v1",
+            "https://api.openai.com/v1",
+            "http://localhost:11434/v1",
+            "http://localhost:8000/v1",
+        ],
         "default_model": "openai/gpt-4o-mini",
         "env_key": "CUSTOM_API_KEY",
         "api_key_optional": True,
@@ -80,6 +86,9 @@ PROVIDER_REGISTRY = {
     "zhipu": {
         "label": "Zhipu",
         "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "base_url_options": [
+            "https://open.bigmodel.cn/api/coding/paas/v4",
+        ],
         "default_model": "glm-4.6",
         "env_key": "ZHIPUAI_API_KEY",
         "api_key_optional": False,
@@ -178,6 +187,36 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _dedupe_string_list(values) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+
+    for raw_value in values:
+        value = str(raw_value or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+
+    return normalized
+
+
+def _provider_base_url_options(spec: dict | None) -> list[str]:
+    if not isinstance(spec, dict):
+        return []
+
+    options = []
+    raw_options = spec.get("base_url_options", [])
+    if isinstance(raw_options, list):
+        options.extend(raw_options)
+
+    default_base_url = str(spec.get("default_base_url") or "").strip()
+    if default_base_url:
+        options.insert(0, default_base_url)
+
+    return _dedupe_string_list(options)
 
 
 def reset_token_usage_tracker() -> None:
@@ -397,6 +436,8 @@ def get_provider_specs() -> dict:
     return {
         name: {
             **spec,
+            "default_base_url": str(spec.get("default_base_url") or "").strip(),
+            "base_url_options": _provider_base_url_options(spec),
             "default_max_tokens": DEFAULT_MAX_TOKENS,
             "default_assistant_model": spec.get("default_model", ""),
             "default_progress_max_workers": DEFAULT_PROGRESS_MAX_WORKERS,
@@ -512,7 +553,8 @@ def load_llm_config() -> dict:
             {
                 "name": name,
                 "label": spec["label"],
-                "default_base_url": spec["default_base_url"],
+                "default_base_url": str(spec.get("default_base_url") or "").strip(),
+                "base_url_options": _provider_base_url_options(spec),
                 "default_model": spec["default_model"],
                 "default_assistant_model": spec["default_model"],
                 "default_progress_model": spec["default_model"],
