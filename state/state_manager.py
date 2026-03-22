@@ -1007,9 +1007,14 @@ def save_project_insight_state(project_id: str, insight_state: dict) -> dict:
 
 
 def load_workspace_insight_state() -> dict:
-    state = read_json(str(_WORKSPACE_INSIGHT_STATE_FILE), default={})
-    insight_state = state.get("insight_state", state)
-    return _normalize_insight_state(insight_state, "__workspace__")
+    raw_state = read_json(str(_WORKSPACE_INSIGHT_STATE_FILE), default={})
+    insight_state = raw_state.get("insight_state", raw_state) if raw_state else {}
+    normalized = _normalize_insight_state(insight_state, "__workspace__")
+
+    if raw_state.get("insight_state") != normalized:
+        write_json(str(_WORKSPACE_INSIGHT_STATE_FILE), {"insight_state": normalized})
+
+    return normalized
 
 
 def save_workspace_insight_state(insight_state: dict) -> dict:
@@ -1102,7 +1107,12 @@ def save_project_insight_settings(
 
 def load_insight_url_history() -> dict:
     raw = read_json(str(_INSIGHT_URL_HISTORY_FILE), default={})
-    return _normalize_insight_url_history(raw)
+    normalized = _normalize_insight_url_history(raw)
+
+    if raw != normalized:
+        write_json(str(_INSIGHT_URL_HISTORY_FILE), normalized)
+
+    return normalized
 
 
 def get_seen_insight_url_keys(*, before_date: str = "") -> set[str]:
