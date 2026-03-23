@@ -21,6 +21,8 @@ from state.state_manager import get_project_risk_lag_threshold
 from state.state_manager import get_project_gantt_theme
 from state.state_manager import save_project_risk_lag_threshold
 from state.state_manager import save_project_gantt_theme
+from state.state_manager import get_project_plan_total_weeks
+from state.state_manager import save_project_plan_total_weeks
 from state.state_manager import list_projects
 from state.state_manager import create_project
 from state.state_manager import delete_project
@@ -179,28 +181,58 @@ def _to_internal_task_shape(tasks: list[dict]) -> list[dict]:
     return normalized
 
 
-def generate_plan_by_mode(okr_text: str, project_id: str, mode: str = "single", progress_callback=None):
+def generate_plan_by_mode(
+    okr_text: str,
+    project_id: str,
+    mode: str = "single",
+    progress_callback=None,
+    target_total_weeks: int | None = None,
+):
 
     # Step1 任务生成
     planning_mode = (mode or "single").strip().lower()
+    normalized_total_weeks: int | None = None
+    if target_total_weeks is not None:
+        try:
+            normalized_total_weeks = max(1, int(target_total_weeks))
+        except (TypeError, ValueError):
+            normalized_total_weeks = None
+
     dependencies: list[dict] = []
     if planning_mode == "multi":
-        multi_result = multi_agent_plan(okr_text, progress_callback=progress_callback)
+        multi_result = multi_agent_plan(
+            okr_text,
+            target_total_weeks=normalized_total_weeks,
+            progress_callback=progress_callback,
+        )
         tasks = _to_internal_task_shape(multi_result.get("tasks", []))
         dependencies = multi_result.get("dependencies", []) or []
     else:
-        single_result = generate_tasks_with_dependencies(okr_text)
-        tasks = single_result.get("tasks", []) or generate_tasks(okr_text)
+        single_result = generate_tasks_with_dependencies(
+            okr_text,
+            target_total_weeks=normalized_total_weeks,
+        )
+        tasks = single_result.get("tasks", []) or generate_tasks(
+            okr_text,
+            target_total_weeks=normalized_total_weeks,
+        )
         dependencies = single_result.get("dependencies", []) or []
 
     objective, krs = _parse_okr_context(okr_text)
     ordered_tasks = _group_tasks_into_kr_blocks(tasks, objective, krs)
 
     # Step2 自动排期
-    scheduled_tasks = schedule_tasks(ordered_tasks, dependencies=dependencies)
+    target_total_days = normalized_total_weeks * 7 if normalized_total_weeks is not None else None
+    scheduled_tasks = schedule_tasks(
+        ordered_tasks,
+        dependencies=dependencies,
+        target_total_days=target_total_days,
+    )
 
     # Step3 保存状态
     save_tasks(scheduled_tasks, project_id, dependencies=dependencies)
+    if normalized_total_weeks is not None:
+        save_project_plan_total_weeks(project_id, normalized_total_weeks)
 
     return scheduled_tasks
 
@@ -1756,6 +1788,14 @@ def delete_existing_project(project_id: str) -> None:
 
 def load_saved_risk_threshold(project_id: str) -> tuple[int, bool]:
     return get_project_risk_lag_threshold(project_id)
+
+
+def load_saved_plan_total_weeks(project_id: str) -> tuple[int, bool]:
+    return get_project_plan_total_weeks(project_id)
+
+
+def save_plan_total_weeks(project_id: str, total_weeks: int) -> int:
+    return save_project_plan_total_weeks(project_id, total_weeks)
 
 
 def load_saved_gantt_theme(project_id: str) -> tuple[str, bool]:

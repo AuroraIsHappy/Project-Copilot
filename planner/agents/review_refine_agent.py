@@ -168,7 +168,19 @@ def _parse(response: str) -> dict:
     }
 
 
-def review_refine_prompt(tasks: list[dict], dependencies: list[dict]) -> str:
+def review_refine_prompt(tasks: list[dict], dependencies: list[dict], target_total_weeks: int | None = None) -> str:
+    horizon_rule = ""
+    if target_total_weeks is not None:
+        try:
+            normalized_weeks = max(1, int(target_total_weeks))
+        except (TypeError, ValueError):
+            normalized_weeks = None
+        if normalized_weeks is not None:
+            horizon_rule = (
+                f"- The revised plan should keep the total project timeline close to {normalized_weeks} weeks.\n"
+                "- If the current plan violates this horizon, adjust durations and dependency overlap/lag to move it closer.\n"
+            )
+
     prompt = f"""
 You are a senior project planning reviewer and reviser.
 
@@ -204,6 +216,7 @@ DEPENDENCY RULES
 - overlap_weeks must be >= 0.
 - lag_weeks can be negative, zero, or positive.
 - Use only task IDs that exist in output tasks.
+{horizon_rule}
 
 LANGUAGE RULE
 
@@ -254,8 +267,8 @@ STRICT OUTPUT RULES
     return prompt
 
 
-def run(tasks: list[dict], dependencies: list[dict]) -> dict:
-    prompt = review_refine_prompt(tasks, dependencies)
+def run(tasks: list[dict], dependencies: list[dict], target_total_weeks: int | None = None) -> dict:
+    prompt = review_refine_prompt(tasks, dependencies, target_total_weeks=target_total_weeks)
     response = call_llm(
         prompt,
         trace_label="review_refine_agent",
@@ -263,5 +276,5 @@ def run(tasks: list[dict], dependencies: list[dict]) -> dict:
     return _parse(response)
 
 
-def review_refine_agent(tasks, dependencies):
-    return run(tasks, dependencies)
+def review_refine_agent(tasks, dependencies, target_total_weeks: int | None = None):
+    return run(tasks, dependencies, target_total_weeks=target_total_weeks)
