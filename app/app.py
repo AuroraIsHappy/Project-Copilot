@@ -50,7 +50,6 @@ from controller import load_insight_state
 from controller import sync_project_insight_today_state
 from controller import load_insight_settings
 from controller import list_saved_insight_cards
-from controller import ensure_daily_insight_feed
 from controller import generate_project_insight_feed
 from controller import mark_insight_notification_seen
 from controller import record_insight_feedback
@@ -83,6 +82,7 @@ _INSIGHT_SOURCE_LABELS = {
 }
 
 _LLM_BASE_URL_CUSTOM_OPTION = "__manual__"
+_INSIGHT_BG_WORKSPACE_KEY = "__workspace__"
 
 
 def inject_styles() -> None:
@@ -1824,19 +1824,6 @@ def _insight_feed_open_key(project_id: str) -> str:
     return f"insight_feed_open_{project_id}"
 
 
-def _insight_auto_checked_key(project_id: str) -> str:
-    return f"insight_auto_checked_{project_id}"
-
-
-def _mark_insight_auto_checked(project_id: str, checked_on: str | None = None) -> None:
-    normalized_project_id = str(project_id or "").strip()
-    if not normalized_project_id:
-        return
-
-    normalized_date = str(checked_on or date.today().isoformat()).strip() or date.today().isoformat()
-    st.session_state[_insight_auto_checked_key(normalized_project_id)] = normalized_date
-
-
 def _insight_toast_seen_key(project_id: str) -> str:
     return f"insight_toast_seen_{project_id}"
 
@@ -1952,14 +1939,16 @@ def _set_insight_feedback_ack(project_id: str, message: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _insight_is_running(project_id: str) -> bool:
-    job = _insight_bg_jobs.get(project_id)
+    _ = project_id
+    job = _insight_bg_jobs.get(_INSIGHT_BG_WORKSPACE_KEY)
     return bool(job and job.get("running"))
 
 
 def _insight_pop_done(project_id: str) -> dict | None:
     """If the job is done, atomically clear the flag and return the job snapshot."""
+    _ = project_id
     with _insight_bg_lock:
-        job = _insight_bg_jobs.get(project_id)
+        job = _insight_bg_jobs.get(_INSIGHT_BG_WORKSPACE_KEY)
         if job and job.get("done"):
             job["done"] = False
             return dict(job)
@@ -1968,44 +1957,50 @@ def _insight_pop_done(project_id: str) -> dict | None:
 
 def _launch_insight_bg(project_id: str, fn, *args, open_after: bool = False, **kwargs) -> None:
     """Run *fn* in a daemon thread; records running/done/result in _insight_bg_jobs."""
-    if _insight_is_running(project_id):
-        return
+    scope_key = _INSIGHT_BG_WORKSPACE_KEY
     with _insight_bg_lock:
-        _insight_bg_jobs[project_id] = {
+        existing = _insight_bg_jobs.get(scope_key)
+        if existing and existing.get("running"):
+            return
+
+        _insight_bg_jobs[scope_key] = {
             "running": True,
             "done": False,
             "result": None,
             "error": "",
             "open_after": open_after,
+            "requested_by": str(project_id or "").strip(),
         }
 
     def _worker() -> None:
         try:
             result = fn(*args, **kwargs)
             with _insight_bg_lock:
-                job = _insight_bg_jobs.get(project_id)
+                job = _insight_bg_jobs.get(scope_key)
                 if isinstance(job, dict):
                     job.update({"running": False, "done": True, "result": result})
                 else:
-                    _insight_bg_jobs[project_id] = {
+                    _insight_bg_jobs[scope_key] = {
                         "running": False,
                         "done": True,
                         "result": result,
                         "error": "",
                         "open_after": open_after,
+                        "requested_by": str(project_id or "").strip(),
                     }
         except Exception as exc:  # noqa: BLE001
             with _insight_bg_lock:
-                job = _insight_bg_jobs.get(project_id)
+                job = _insight_bg_jobs.get(scope_key)
                 if isinstance(job, dict):
                     job.update({"running": False, "done": True, "error": str(exc)})
                 else:
-                    _insight_bg_jobs[project_id] = {
+                    _insight_bg_jobs[scope_key] = {
                         "running": False,
                         "done": True,
                         "result": None,
                         "error": str(exc),
                         "open_after": open_after,
+                        "requested_by": str(project_id or "").strip(),
                     }
 
     threading.Thread(target=_worker, daemon=True).start()
@@ -2023,34 +2018,6 @@ def _insight_done_dialog(project_id: str) -> None:
     with col2:
         if st.button("关闭", key=f"dlg_later_{project_id}", use_container_width=True, type="secondary"):
             st.rerun()
-
-
-def _run_daily_insight_auto_trigger(
-    project_id: str,
-    insight_settings: dict | None = None,
-    insight_state: dict | None = None,
-) -> None:
-    settings = insight_settings if isinstance(insight_settings, dict) else load_insight_settings(project_id)
-    if not _insight_generation_ready(settings):
-        return
-
-    check_key = _insight_auto_checked_key(project_id)
-    today = date.today().isoformat()
-    if st.session_state.get(check_key) == today:
-        return
-
-    state = insight_state if isinstance(insight_state, dict) else load_insight_state(project_id)
-    latest_feed = state.get("latest_feed") if isinstance(state, dict) else None
-    latest_feed_date = str(latest_feed.get("date") or "").strip() if isinstance(latest_feed, dict) else ""
-    if str(state.get("last_generated_on") or "").strip() == today or latest_feed_date == today:
-        st.session_state[check_key] = today
-        return
-
-    if _insight_is_running(project_id):
-        return
-
-    st.session_state[check_key] = today
-    _launch_insight_bg(project_id, ensure_daily_insight_feed, project_id, open_after=False)
 
 
 def _maybe_show_insight_toast(project_id: str, insight_state: dict | None = None) -> dict:
@@ -3081,7 +3048,6 @@ def main() -> None:
 
     # ── Reset session state when switching projects ───────────────────────────
     previous_project_id = st.session_state.get("_last_project_id")
-    project_switched = previous_project_id is not None and previous_project_id != active_project_id
 
     if previous_project_id != active_project_id:
         st.session_state._last_project_id = active_project_id
@@ -3107,14 +3073,6 @@ def main() -> None:
     insight_state = load_insight_state(active_project_id)
     if has_plan:
         insight_state = sync_project_insight_today_state(active_project_id)
-        if project_switched:
-            _mark_insight_auto_checked(active_project_id)
-        else:
-            _run_daily_insight_auto_trigger(
-                active_project_id,
-                insight_settings,
-                insight_state=insight_state,
-            )
 
     insight_state = _maybe_show_insight_toast(active_project_id, insight_state)
 
