@@ -829,7 +829,7 @@ def _render_assistant_launcher(project_id: str, *, show_hint: bool = True, compa
 
     if is_open:
         if st.button(
-            "Close Chat window",
+            "关闭聊天窗口",
             key=f"assistant_close_btn_{project_id}",
             use_container_width=not compact,
             type="secondary",
@@ -838,7 +838,7 @@ def _render_assistant_launcher(project_id: str, *, show_hint: bool = True, compa
             st.rerun()
     else:
         if st.button(
-            "💬 Chat with Assistant",
+            "💬 打开聊天窗口",
             key=f"assistant_open_btn_{project_id}",
             use_container_width=not compact,
             type="primary",
@@ -2938,7 +2938,7 @@ def _render_assistant_panel(project_id: str) -> None:
     pending_user_msg_ts = _format_chat_timestamp(pending_user_msg_ts_raw)
 
     if st.button(
-        "Close Chat window",
+        "关闭聊天窗口",
         key=f"assistant_close_inline_btn_{project_id}",
         use_container_width=False,
         type="secondary",
@@ -3322,7 +3322,7 @@ def main() -> None:
         if st.session_state.get(_insight_feed_open_key(active_project_id), False):
             _render_insight_feed(active_project_id)
 
-        tab_timeline, tab_graph, tab_table = st.tabs(["Timeline", "Dependency Graph", "Task Table"])
+        tab_timeline, tab_graph, tab_table = st.tabs(["甘特图", "依赖图", "任务表"])
 
         with tab_timeline:
             objective = _extract_objective(tasks)
