@@ -3,3 +3,5 @@
 # (prefers-color-scheme media query + html[data-theme] selector).
 # Remove or comment out the lines below to restore Streamlit's default picker.
 # base = "light"
+[client]
+toolbarMode = "minimal"
