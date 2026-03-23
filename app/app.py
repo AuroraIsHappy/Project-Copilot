@@ -2907,7 +2907,34 @@ def _format_chat_timestamp(raw_ts: str) -> str:
         return text.replace("T", " ")
 
 
-def _render_assistant_panel(project_id: str) -> None:
+def _build_assistant_chat_export_markdown(project_name: str, history: list[dict]) -> bytes:
+    safe_project_name = str(project_name or "项目").strip() or "项目"
+    export_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    normalized_history = history if isinstance(history, list) else []
+
+    lines = [
+        f"# {safe_project_name} Assistant 聊天记录",
+        "",
+        f"- 导出时间: {export_ts}",
+        f"- 消息数: {len(normalized_history)}",
+        "",
+    ]
+
+    for index, msg in enumerate(normalized_history, start=1):
+        role = "Assistant" if str(msg.get("role") or "").strip() == "assistant" else "You"
+        ts_text = _format_chat_timestamp(msg.get("ts", ""))
+        content = str(msg.get("content", "") or "").strip()
+        lines.append(f"## {index}. {role}")
+        if ts_text:
+            lines.append(f"- 时间: {ts_text}")
+        lines.append("")
+        lines.append(content or "（空消息）")
+        lines.append("")
+
+    return "\n".join(lines).encode("utf-8")
+
+
+def _render_assistant_panel(project_id: str, project_name: str) -> None:
     _hydrate_summary_state(project_id)
 
     assistant_state = load_project_assistant_state(project_id)
@@ -2931,6 +2958,19 @@ def _render_assistant_panel(project_id: str) -> None:
 
     st.markdown("### Assistant")
     st.caption("可自然语言提问、提出任务修改。涉及修改的操作需要你确认后才会执行。")
+    if history:
+        st.caption(f"当前会话已保存 {len(history)} 条消息，可在聊天框内滚动查看完整记录。")
+        export_file_name = (
+            f"{_safe_file_stem(project_name, fallback=f'project_{project_id[:8]}')}_assistant_chat_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+        )
+        st.download_button(
+            "导出聊天记录",
+            data=_build_assistant_chat_export_markdown(project_name, history),
+            file_name=export_file_name,
+            mime="text/markdown",
+            key=f"assistant_chat_export_{project_id}",
+        )
 
     if isinstance(pending_change, dict):
         pending_kind = str(pending_change.get("kind", "task_update")).strip().lower()
@@ -2954,7 +2994,7 @@ def _render_assistant_panel(project_id: str) -> None:
 
     chat_box = st.container(height=460)
     with chat_box:
-        for msg in history[-12:]:
+        for msg in history:
             role = "assistant" if msg.get("role") == "assistant" else "user"
             with st.chat_message(role):
                 st.caption("Assistant" if role == "assistant" else "You")
@@ -3118,7 +3158,7 @@ def main() -> None:
                 render_metrics([])
             with assistant_col:
                 with st.container(key=f"assistant_panel_wrap_{active_project_id}"):
-                    _render_assistant_panel(active_project_id)
+                    _render_assistant_panel(active_project_id, project_name)
         else:
             left_col, right_col = st.columns([2.1, 1], gap="large")
             with left_col:
@@ -3149,7 +3189,7 @@ def main() -> None:
                     st.rerun()
             with assistant_col:
                 with st.container(key=f"assistant_panel_wrap_{active_project_id}"):
-                    _render_assistant_panel(active_project_id)
+                    _render_assistant_panel(active_project_id, project_name)
         else:
             left_col, right_col = st.columns([2.1, 1], gap="large")
             with left_col:
@@ -3182,7 +3222,7 @@ def main() -> None:
                     st.rerun()
             with assistant_col:
                 with st.container(key=f"assistant_panel_wrap_{active_project_id}"):
-                    _render_assistant_panel(active_project_id)
+                    _render_assistant_panel(active_project_id, project_name)
         else:
             left_col, right_col = st.columns([2.1, 1], gap="large")
             with left_col:
@@ -3215,7 +3255,7 @@ def main() -> None:
                     st.rerun()
             with assistant_col:
                 with st.container(key=f"assistant_panel_wrap_{active_project_id}"):
-                    _render_assistant_panel(active_project_id)
+                    _render_assistant_panel(active_project_id, project_name)
         else:
             left_col, right_col = st.columns([2.1, 1], gap="large")
             with left_col:
@@ -3343,7 +3383,7 @@ def main() -> None:
         with right_col:
             if assistant_open:
                 with st.container(key=f"assistant_panel_wrap_{active_project_id}"):
-                    _render_assistant_panel(active_project_id)
+                    _render_assistant_panel(active_project_id, project_name)
             else:
                 render_metrics(tasks)
                 st.markdown("---")

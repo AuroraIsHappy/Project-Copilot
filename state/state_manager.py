@@ -955,6 +955,36 @@ def save_project_summary_state(
 # Assistant state (project-scoped)
 # ---------------------------------------------------------------------------
 
+def _normalize_assistant_chat_history(history: object) -> list[dict]:
+    if not isinstance(history, list):
+        return []
+
+    normalized: list[dict] = []
+    for item in history:
+        if isinstance(item, dict):
+            normalized.append(dict(item))
+    return normalized
+
+
+def _merge_assistant_chat_history(existing_history: object, incoming_history: object) -> list[dict]:
+    """Preserve older chat entries when callers write back a trimmed suffix."""
+    merged_incoming = _normalize_assistant_chat_history(incoming_history)
+    if not merged_incoming:
+        return merged_incoming
+
+    merged_existing = _normalize_assistant_chat_history(existing_history)
+    if not merged_existing or len(merged_incoming) >= len(merged_existing):
+        return merged_incoming
+    if merged_incoming == merged_existing:
+        return merged_incoming
+
+    max_overlap = min(len(merged_existing), len(merged_incoming))
+    for overlap in range(max_overlap, 0, -1):
+        if merged_existing[-overlap:] == merged_incoming[:overlap]:
+            return merged_existing + merged_incoming[overlap:]
+
+    return merged_incoming
+
 def load_project_assistant_state(project_id: str) -> dict:
     """Load project-scoped assistant state.
 
@@ -967,9 +997,7 @@ def load_project_assistant_state(project_id: str) -> dict:
       }
     """
     state = read_json(str(_project_file(project_id)), default={})
-    chat_history = state.get("chat_history", [])
-    if not isinstance(chat_history, list):
-        chat_history = []
+    chat_history = _normalize_assistant_chat_history(state.get("chat_history", []))
 
     assistant_memory = state.get("assistant_memory", "")
     if not isinstance(assistant_memory, str):
@@ -1005,7 +1033,7 @@ def save_project_assistant_state(
     state = read_json(file_path, default={})
 
     if chat_history is not None:
-        state["chat_history"] = chat_history
+        state["chat_history"] = _merge_assistant_chat_history(state.get("chat_history", []), chat_history)
     if assistant_memory is not None:
         state["assistant_memory"] = assistant_memory
     if last_actions is not None:
