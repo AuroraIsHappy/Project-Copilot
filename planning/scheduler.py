@@ -234,6 +234,12 @@ def _align_schedule_to_total_days(scheduled_tasks: list[dict], target_total_days
     if current_total_days == target_days:
         return scheduled_tasks
 
+    # Keep timeline math on whole-week boundaries to avoid mid-week drift.
+    current_total_weeks = max(1, (current_total_days + 6) // 7)
+    target_total_weeks = max(1, (target_days + 6) // 7)
+    if current_total_weeks == target_total_weeks:
+        return scheduled_tasks
+
     aligned_tasks: list[dict] = []
     for task in scheduled_tasks:
         task_start = task.get("start")
@@ -242,25 +248,28 @@ def _align_schedule_to_total_days(scheduled_tasks: list[dict], target_total_days
             aligned_tasks.append(task)
             continue
 
-        start_offset = max(0, (task_start - min_start).days)
-        end_offset = max(start_offset + 1, (task_end - min_start).days)
+        start_offset_days = max(0, (task_start - min_start).days)
+        end_offset_days = max(start_offset_days + 1, (task_end - min_start).days)
 
-        new_start_offset = (start_offset * target_days) // current_total_days
-        new_end_offset = (end_offset * target_days + current_total_days - 1) // current_total_days
+        start_offset_weeks = max(0, start_offset_days // 7)
+        end_offset_weeks = max(start_offset_weeks + 1, (end_offset_days + 6) // 7)
 
-        new_start_offset = min(max(0, new_start_offset), target_days)
-        new_end_offset = min(max(0, new_end_offset), target_days)
-        if new_end_offset <= new_start_offset:
-            if new_start_offset >= target_days:
-                new_start_offset = max(0, target_days - 1)
-                new_end_offset = target_days
+        new_start_week_offset = (start_offset_weeks * target_total_weeks) // current_total_weeks
+        new_end_week_offset = (end_offset_weeks * target_total_weeks + current_total_weeks - 1) // current_total_weeks
+
+        new_start_week_offset = min(max(0, new_start_week_offset), target_total_weeks)
+        new_end_week_offset = min(max(0, new_end_week_offset), target_total_weeks)
+        if new_end_week_offset <= new_start_week_offset:
+            if new_start_week_offset >= target_total_weeks:
+                new_start_week_offset = max(0, target_total_weeks - 1)
+                new_end_week_offset = target_total_weeks
             else:
-                new_end_offset = min(target_days, new_start_offset + 1)
+                new_end_week_offset = min(target_total_weeks, new_start_week_offset + 1)
 
-        new_start = min_start + timedelta(days=new_start_offset)
-        new_end = min_start + timedelta(days=new_end_offset)
-        new_duration_days = max(1, (new_end - new_start).days)
-        new_duration_weeks = max(1, (new_duration_days + 6) // 7)
+        new_start = min_start + timedelta(days=new_start_week_offset * 7)
+        new_end = min_start + timedelta(days=new_end_week_offset * 7)
+        new_duration_days = max(7, (new_end - new_start).days)
+        new_duration_weeks = max(1, new_duration_days // 7)
 
         aligned_task = dict(task)
         aligned_task.update(
@@ -273,7 +282,9 @@ def _align_schedule_to_total_days(scheduled_tasks: list[dict], target_total_days
             }
         )
         if "start_week" in aligned_task:
-            aligned_task["start_week"] = max(1, new_start_offset // 7 + 1)
+            aligned_task["start_week"] = max(1, new_start_week_offset + 1)
+        if "end_week" in aligned_task:
+            aligned_task["end_week"] = max(aligned_task.get("start_week", 1), new_end_week_offset)
         aligned_tasks.append(aligned_task)
 
     return aligned_tasks

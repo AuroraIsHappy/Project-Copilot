@@ -276,7 +276,7 @@ def create_gantt(tasks: list[dict], objective: str = "", theme: str = "default")
 
     min_start = min(valid_dates)
     max_end = max(valid_dates)
-    total_days = max(7, (max_end - min_start).days + 1)
+    total_days = max(7, (max_end - min_start).days)
     total_weeks = max(1, (total_days + 6) // 7)
     week_pct = (7 / total_days) * 100
 
@@ -363,7 +363,7 @@ def create_gantt(tasks: list[dict], objective: str = "", theme: str = "default")
         label_end_date = start if end <= start else (end - timedelta(days=1))
         end_week = max(start_week, ((label_end_date - min_start).days) // 7 + 1)
         left_pct = (offset_days / total_days) * 100
-        width_pct = max(8.0, (duration_days / total_days) * 100)
+        width_pct = max(0.2, (duration_days / total_days) * 100)
 
         status_text = str(task.get("status", "Planned"))
         progress_percent = _to_progress_percent(task.get("progress", 0), status_text)
@@ -596,7 +596,6 @@ def create_gantt(tasks: list[dict], objective: str = "", theme: str = "default")
         display: flex;
         align-items: center;
         padding: 0 8px;
-        min-width: 110px;
         overflow: hidden;
         box-sizing: border-box;
       }}
