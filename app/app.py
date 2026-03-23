@@ -90,6 +90,7 @@ def inject_styles() -> None:
         @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 
         :root {
+            /* Base palette */
             --bg: #ffffff;
             --panel: #ffffff;
             --ink: #0d0d0d;
@@ -100,6 +101,130 @@ def inject_styles() -> None:
             --line: #e5e5e5;
             --sidebar-bg: #f9f9f9;
             --assistant-bg: #f6f8fb;
+            /* Interactive elements */
+            --btn-bg: #ffffff;
+            --btn-color: #111827;
+            --btn-hover-bg: #f8fafc;
+            --line-hover: #d1d5db;
+            --input-bg: #ffffff;
+            --tab-bg: #ffffff;
+            --tab-color: #374151;
+            --tab-active-bg: #f3f4f6;
+            --tab-active-color: #111827;
+            --radio-bg: #ffffff;
+            --radio-checked-bg: #eff6ff;
+            --radio-checked-border: #bfdbfe;
+            /* Chat */
+            --chat-msg-border: #d9dee7;
+            --chat-user-bg: #dbeafe;
+            --chat-user-border: #93c5fd;
+            --chat-assistant-bg: #f8fafc;
+            --chat-assistant-border: #cbd5e1;
+            /* Cards & insight feed */
+            --card-bg: #ffffff;
+            --card-subtle-bg: #fafafa;
+            --insight-feed-bg: #f8fbff;
+            --insight-border: #dbe3f0;
+            --insight-link: #0f172a;
+            --insight-label: #475569;
+            --insight-body: #111827;
+            --insight-meta: #64748b;
+            --insight-annotation-bg: #eff6ff;
+            --insight-annotation-border: #93c5fd;
+            --insight-annotation-color: #1d4ed8;
+            --insight-page-color: #6b7280;
+            --insight-ack-bg: #f8fafc;
+            --insight-ack-color: #475569;
+            --assistant-panel-border: #dde3ec;
+        }
+
+        /* ── Dark-mode variable overrides ── */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0e1117;
+                --panel: #1e2129;
+                --ink: #fafafa;
+                --muted: #9ca3af;
+                --brand-soft: #0d3027;
+                --line: #3d4147;
+                --sidebar-bg: #171b22;
+                --assistant-bg: #1e2129;
+                --btn-bg: #262730;
+                --btn-color: #f9fafb;
+                --btn-hover-bg: #303340;
+                --line-hover: #4b5563;
+                --input-bg: #262730;
+                --tab-bg: #1e2129;
+                --tab-color: #d1d5db;
+                --tab-active-bg: #2d3748;
+                --tab-active-color: #f9fafb;
+                --radio-bg: #1e2129;
+                --radio-checked-bg: #1e3a5f;
+                --radio-checked-border: #3b82f6;
+                --chat-msg-border: #3d4147;
+                --chat-user-bg: #1e3a5f;
+                --chat-user-border: #3b82f6;
+                --chat-assistant-bg: #1e2129;
+                --chat-assistant-border: #3d4147;
+                --card-bg: #1e2129;
+                --card-subtle-bg: #1e2129;
+                --insight-feed-bg: #1a1e2b;
+                --insight-border: #3d4147;
+                --insight-link: #f1f5f9;
+                --insight-label: #94a3b8;
+                --insight-body: #e2e8f0;
+                --insight-meta: #94a3b8;
+                --insight-annotation-bg: #1e3a5f;
+                --insight-annotation-border: #3b82f6;
+                --insight-annotation-color: #93c5fd;
+                --insight-page-color: #9ca3af;
+                --insight-ack-bg: #1e2129;
+                --insight-ack-color: #94a3b8;
+                --assistant-panel-border: #3d4147;
+            }
+        }
+
+        html[data-theme="dark"] {
+            --bg: #0e1117;
+            --panel: #1e2129;
+            --ink: #fafafa;
+            --muted: #9ca3af;
+            --brand-soft: #0d3027;
+            --line: #3d4147;
+            --sidebar-bg: #171b22;
+            --assistant-bg: #1e2129;
+            --btn-bg: #262730;
+            --btn-color: #f9fafb;
+            --btn-hover-bg: #303340;
+            --line-hover: #4b5563;
+            --input-bg: #262730;
+            --tab-bg: #1e2129;
+            --tab-color: #d1d5db;
+            --tab-active-bg: #2d3748;
+            --tab-active-color: #f9fafb;
+            --radio-bg: #1e2129;
+            --radio-checked-bg: #1e3a5f;
+            --radio-checked-border: #3b82f6;
+            --chat-msg-border: #3d4147;
+            --chat-user-bg: #1e3a5f;
+            --chat-user-border: #3b82f6;
+            --chat-assistant-bg: #1e2129;
+            --chat-assistant-border: #3d4147;
+            --card-bg: #1e2129;
+            --card-subtle-bg: #1e2129;
+            --insight-feed-bg: #1a1e2b;
+            --insight-border: #3d4147;
+            --insight-link: #f1f5f9;
+            --insight-label: #94a3b8;
+            --insight-body: #e2e8f0;
+            --insight-meta: #94a3b8;
+            --insight-annotation-bg: #1e3a5f;
+            --insight-annotation-border: #3b82f6;
+            --insight-annotation-color: #93c5fd;
+            --insight-page-color: #9ca3af;
+            --insight-ack-bg: #1e2129;
+            --insight-ack-color: #94a3b8;
+            --assistant-panel-border: #3d4147;
         }
 
         .stApp {
@@ -123,7 +248,7 @@ def inject_styles() -> None:
         }
 
         .hero {
-            background: #ffffff;
+            background: var(--card-bg);
             border: 1px solid var(--line);
             border-radius: 12px;
             padding: 1.2rem 1.4rem;
@@ -134,7 +259,7 @@ def inject_styles() -> None:
 
         .metric-card {
             border: 1px solid var(--line);
-            background: #fafafa;
+            background: var(--card-subtle-bg);
             border-radius: 10px;
             padding: 0.8rem 0.9rem;
             margin-bottom: 0.7rem;
@@ -156,7 +281,7 @@ def inject_styles() -> None:
         .stTextArea textarea {
             border-radius: 8px;
             border: 1px solid var(--line);
-            background: #ffffff;
+            background: var(--input-bg);
             min-height: 210px;
         }
 
@@ -164,16 +289,16 @@ def inject_styles() -> None:
             width: 100%;
             border-radius: 8px;
             border: 1px solid var(--line);
-            color: #111827;
+            color: var(--btn-color);
             font-weight: 600;
-            background: #ffffff;
+            background: var(--btn-bg);
             box-shadow: none;
             transition: background 0.15s ease, border-color 0.15s ease;
         }
 
         .stButton button:hover {
-            background: #f8fafc;
-            border-color: #d1d5db;
+            background: var(--btn-hover-bg);
+            border-color: var(--line-hover);
             box-shadow: none;
         }
 
@@ -184,13 +309,13 @@ def inject_styles() -> None:
         }
 
         [class*="st-key-assistant_open_btn_"] button {
-            background: #fafafa;
-            border-color: #e5e5e5;
+            background: var(--btn-bg);
+            border-color: var(--line);
         }
 
         [class*="st-key-assistant_open_btn_"] button:hover {
-            background: #f3f4f6;
-            border-color: #d1d5db;
+            background: var(--btn-hover-bg);
+            border-color: var(--line-hover);
         }
 
         [class*="st-key-right_panel_toggle_btn_"] button {
@@ -199,16 +324,16 @@ def inject_styles() -> None:
 
         /* Agent mode radio: clean blue-gray selected state */
         div[role="radiogroup"] > label {
-            border: 1px solid #e5e7eb;
+            border: 1px solid var(--line);
             border-radius: 999px;
             padding: 0.25rem 0.7rem;
-            background: #ffffff;
+            background: var(--radio-bg);
             transition: background 0.15s ease, border-color 0.15s ease;
         }
 
         div[role="radiogroup"] > label:has(input:checked) {
-            background: #eff6ff;
-            border-color: #bfdbfe;
+            background: var(--radio-checked-bg);
+            border-color: var(--radio-checked-border);
         }
 
         /* Tabs (Timeline / Dependency Graph / Task Table): avoid red active color */
@@ -217,18 +342,18 @@ def inject_styles() -> None:
         }
 
         .stTabs [data-baseweb="tab"] {
-            border: 1px solid #e5e7eb;
+            border: 1px solid var(--line);
             border-radius: 8px;
-            background: #ffffff;
-            color: #374151;
+            background: var(--tab-bg);
+            color: var(--tab-color);
             padding: 0.3rem 0.75rem;
             box-shadow: none;
         }
 
         .stTabs [aria-selected="true"] {
-            background: #f3f4f6;
-            border-color: #d1d5db;
-            color: #111827;
+            background: var(--tab-active-bg);
+            border-color: var(--line);
+            color: var(--tab-active-color);
             box-shadow: none;
         }
 
@@ -255,14 +380,14 @@ def inject_styles() -> None:
             width: 16px;
             height: 16px;
             border-radius: 999px;
-            border: 1px solid #d1d5db;
+            border: 1px solid var(--line);
             box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.42);
             flex: 0 0 auto;
         }
 
         [class*="st-key-assistant_panel_wrap_"] {
             background: var(--assistant-bg);
-            border: 1px solid #dde3ec;
+            border: 1px solid var(--assistant-panel-border);
             border-radius: 12px;
             padding: 0.9rem;
         }
@@ -272,31 +397,31 @@ def inject_styles() -> None:
             border-radius: 10px;
             padding: 0.45rem 0.55rem;
             margin-bottom: 0.45rem;
-            border: 1px solid #d9dee7;
-            background: #ffffff;
+            border: 1px solid var(--chat-msg-border);
+            background: var(--card-bg);
         }
 
         [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-            background: #dbeafe !important;
-            border-color: #93c5fd !important;
+            background: var(--chat-user-bg) !important;
+            border-color: var(--chat-user-border) !important;
         }
 
         [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-            background: #f8fafc !important;
-            border-color: #cbd5e1 !important;
+            background: var(--chat-assistant-bg) !important;
+            border-color: var(--chat-assistant-border) !important;
         }
 
         /* Fallback selectors for Streamlit DOM variants */
         [data-testid="stChatMessage"]:has([aria-label*="user" i]),
         [data-testid="stChatMessage"]:has(svg[aria-label*="user" i]) {
-            background: #dbeafe !important;
-            border-color: #93c5fd !important;
+            background: var(--chat-user-bg) !important;
+            border-color: var(--chat-user-border) !important;
         }
 
         [data-testid="stChatMessage"]:has([aria-label*="assistant" i]),
         [data-testid="stChatMessage"]:has(svg[aria-label*="assistant" i]) {
-            background: #f8fafc !important;
-            border-color: #cbd5e1 !important;
+            background: var(--chat-assistant-bg) !important;
+            border-color: var(--chat-assistant-border) !important;
         }
 
         /* Streamlit chat input draws border on the inner wrapper, not on this root. */
@@ -313,7 +438,7 @@ def inject_styles() -> None:
         div[data-testid="stChatInput"] > div {
             border: 1.5px solid #60a5fa !important;
             border-radius: 10px !important;
-            background: #ffffff !important;
+            background: var(--input-bg) !important;
             box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.12) !important;
             outline: none !important;
         }
@@ -353,17 +478,17 @@ def inject_styles() -> None:
         }
 
         .insight-feed-wrap {
-            border: 1px solid #dbe3f0;
+            border: 1px solid var(--insight-border);
             border-radius: 12px;
-            background: #f8fbff;
+            background: var(--insight-feed-bg);
             padding: 0.85rem 0.95rem;
             margin: 0.35rem 0 0.8rem 0;
         }
 
         .insight-card {
-            border: 1px solid #dbe3f0;
+            border: 1px solid var(--insight-border);
             border-radius: 12px;
-            background: #ffffff;
+            background: var(--card-bg);
             padding: 0.8rem 0.9rem;
             margin-bottom: 0.65rem;
         }
@@ -376,7 +501,7 @@ def inject_styles() -> None:
         }
 
         .insight-card-title a {
-            color: #0f172a;
+            color: var(--insight-link);
             text-decoration: none;
         }
 
@@ -385,30 +510,30 @@ def inject_styles() -> None:
         }
 
         .insight-label {
-            color: #475569;
+            color: var(--insight-label);
             font-size: 0.82rem;
             margin: 0.35rem 0 0.1rem 0;
             font-weight: 600;
         }
 
         .insight-body {
-            color: #111827;
+            color: var(--insight-body);
             margin: 0;
             font-size: 0.95rem;
             line-height: 1.45;
         }
 
         .saved-insight-directory-item {
-            border: 1px solid #dbe3f0;
+            border: 1px solid var(--insight-border);
             border-radius: 12px;
-            background: #ffffff;
+            background: var(--card-bg);
             padding: 0.7rem 0.8rem;
             margin-bottom: 0.65rem;
         }
 
         .saved-insight-directory-line {
             margin: 0;
-            color: #0f172a;
+            color: var(--insight-link);
             font-size: 0.92rem;
             line-height: 1.45;
             font-weight: 600;
@@ -416,7 +541,7 @@ def inject_styles() -> None:
 
         .saved-insight-directory-meta {
             margin: 0.22rem 0 0 0;
-            color: #64748b;
+            color: var(--insight-meta);
             font-size: 0.8rem;
             line-height: 1.35;
         }
@@ -425,9 +550,9 @@ def inject_styles() -> None:
             margin-top: 0.5rem;
             padding: 0.52rem 0.68rem;
             border-radius: 10px;
-            border: 1px solid #93c5fd;
-            background: #eff6ff;
-            color: #1d4ed8;
+            border: 1px solid var(--insight-annotation-border);
+            background: var(--insight-annotation-bg);
+            color: var(--insight-annotation-color);
             font-size: 0.88rem;
             line-height: 1.45;
             font-weight: 600;
@@ -450,15 +575,15 @@ def inject_styles() -> None:
             max-height: 86vh;
             overflow-y: auto;
             z-index: 10011;
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
+            background: var(--card-bg);
+            border: 1px solid var(--line);
             border-radius: 16px;
             box-shadow: 0 24px 58px rgba(15, 23, 42, 0.34);
             padding: 0.85rem 0.95rem;
         }
 
         .insight-modal-card {
-            background: #ffffff;
+            background: var(--card-bg);
             border: none;
             border-radius: 12px;
             padding: 1.05rem 1.1rem;
@@ -468,7 +593,7 @@ def inject_styles() -> None:
         }
 
         .insight-page-indicator {
-            color: #6b7280;
+            color: var(--insight-page-color);
             font-weight: 600;
             text-align: center;
             padding-top: 0.7rem;
@@ -477,9 +602,9 @@ def inject_styles() -> None:
         }
 
         .insight-feedback-ack {
-            border: 1px solid #e5e7eb;
-            background: #f8fafc;
-            color: #475569;
+            border: 1px solid var(--line);
+            background: var(--insight-ack-bg);
+            color: var(--insight-ack-color);
             border-radius: 0;
             padding: 0.55rem 0.75rem;
             margin: 0.35rem 0 0.5rem 0;
@@ -533,9 +658,9 @@ def inject_styles() -> None:
 
         [class*="st-key-insight_hide_feed_"] button {
             border-radius: 999px;
-            border: 1px solid #d1d5db;
-            background: #ffffff;
-            color: #374151;
+            border: 1px solid var(--line);
+            background: var(--btn-bg);
+            color: var(--tab-color);
             font-size: 1rem;
             font-weight: 700;
             min-height: 2.05rem;
@@ -545,9 +670,9 @@ def inject_styles() -> None:
         [class*="st-key-insight_next_"] button {
             min-height: 3rem;
             border-radius: 999px;
-            border: 1px solid #d1d5db;
-            background: #ffffff;
-            color: #374151;
+            border: 1px solid var(--line);
+            background: var(--btn-bg);
+            color: var(--tab-color);
             font-size: 1.2rem;
             font-weight: 700;
         }
@@ -559,9 +684,9 @@ def inject_styles() -> None:
 
         [class*="st-key-dlg_view_"] button,
         [class*="st-key-dlg_later_"] button {
-            border: 1px solid #d1d5db !important;
-            background: #ffffff !important;
-            color: #111827 !important;
+            border: 1px solid var(--line) !important;
+            background: var(--btn-bg) !important;
+            color: var(--btn-color) !important;
             box-shadow: none !important;
         }
 
@@ -657,7 +782,7 @@ def render_header(project_name: str = "") -> None:
         f"""
         <div class="hero">
                                         <h1 style="margin:0;">Project Copilot</h1>
-          <p style="margin:0.5rem 0 0 0;color:#5a6272;">
+          <p style="margin:0.5rem 0 0 0;color:var(--muted);">
             {subtitle}
           </p>
         </div>
