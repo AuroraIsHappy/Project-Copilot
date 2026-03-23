@@ -231,12 +231,16 @@ def build_prompt(okr, target_total_weeks: int | None = None):
             horizon_rule = (
                 f"- The full project timeline from the first task start to the final task end should be close to {normalized_weeks} weeks.\n"
                 "- Choose durations and dependency overlap/lag so the overall schedule is realistic within that horizon.\n"
+                "- Close enough is sufficient; do not spend effort searching for an exact optimum.\n"
             )
 
     prompt = f"""
 You are a senior technical project planner.
 
 Your task is to convert an OKR into a realistic plan with actionable project tasks and task dependencies.
+
+Use fast, practical judgment and return a good-enough feasible plan in one pass.
+Do not search for the perfect schedule.
 
 Use the following internal reasoning process:
 
@@ -255,19 +259,24 @@ PLANNING GUIDELINES:
 - Tasks should follow a logical project workflow.
 - Typical stages include:
   research → design → implementation → testing → launch
-- Prefer 8–12 tasks.
+- Prefer 8-12 tasks.
+- Do not exceed 12 tasks unless the OKR clearly requires multiple independent workstreams.
 - Each task should take between 1 and 12 weeks.
+- Keep each task_name concise and direct.
 - Ensure tasks collectively support achieving the Key Results.
 - Ensure tasks cover the full project lifecycle.
 - Add realistic dependencies.
 - Allow overlap when reasonable by using overlap_weeks > 0.
+- Keep dependencies sparse and include only sequencing links that are truly needed.
+- Prefer the simplest feasible plan over the most optimized plan.
 {horizon_rule}
 
 Language rule:
-- Detect the OKR language from user input.
-- If the OKR is in Chinese, output task_name in Chinese.
-- If the OKR is in English, output task_name in English.
-- Do not mix Chinese and English in task_name values.
+- Determine the dominant language from the full OKR sentence structure, not from isolated technical terms, acronyms, benchmark names, or product names.
+- If the OKR is mainly Chinese, or Chinese with some English technical terms or acronyms, output task_name in Chinese.
+- Treat terms such as SOTA, Attention, Tool-use, Video-MME, LibriTTS, VCTK and similar technical names as terminology, not as evidence that the OKR language is English.
+- Only output all-English task_name values when the OKR is predominantly written in English sentences.
+- You may keep well-known English acronyms or benchmark names inside otherwise Chinese task_name values when necessary.
 
 OKR:
 {okr}
@@ -299,6 +308,8 @@ STRICT OUTPUT RULES:
 - No explanations.
 - No markdown.
 - No text outside the JSON.
+- No reasoning text.
+- Keep the JSON compact and do not add extra fields.
 """
     return prompt
 

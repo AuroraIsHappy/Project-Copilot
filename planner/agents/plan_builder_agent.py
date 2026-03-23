@@ -159,12 +159,16 @@ def plan_builder_prompt(strategies: list[dict], target_total_weeks: int | None =
             horizon_rule = (
                 f"- The total project timeline from first task start to final task end should be close to {normalized_weeks} weeks.\n"
                 "- Tune durations and dependency overlap/lag to make the initial plan fit that horizon.\n"
+                "- Close enough is sufficient; do not search for an exact optimum.\n"
             )
 
     prompt = f"""
 You are an experienced technical project planner.
 
 Your task is to convert high-level strategies into a complete executable project plan in one pass.
+
+Use fast, practical judgment and produce a good-enough feasible plan.
+Do not search for the globally optimal schedule.
 
 You must output:
 1) a task list
@@ -176,10 +180,12 @@ Do reasoning internally and output only JSON.
 TASK RULES
 
 - Each task must be concrete and implementable.
-- Prefer 6-12 tasks.
+- Prefer 8-12 tasks.
+- Do not exceed 12 tasks unless the strategies clearly represent multiple independent workstreams.
 - Use integer duration_weeks only.
 - duration_weeks must be between 1 and 12.
 - Keep task IDs stable and unique as T1, T2, ...
+- Keep each task_name short and direct.
 
 DEPENDENCY RULES
 
@@ -189,6 +195,7 @@ DEPENDENCY RULES
 - Avoid circular dependencies.
 - overlap_weeks must be >= 0.
 - lag_weeks can be negative, zero, or positive.
+- Keep dependencies sparse and include only the critical sequencing links.
 {horizon_rule}
 
 FLOW GUIDANCE
@@ -198,10 +205,11 @@ research -> design -> implementation -> testing -> release
 
 LANGUAGE RULE
 
-- Detect language from strategy text.
-- If strategies are Chinese, output task_name in Chinese.
-- If strategies are English, output task_name in English.
-- Do not mix Chinese and English in task_name.
+- Determine the dominant language from the full strategy text, not from isolated technical terms, acronyms, benchmark names, or product names.
+- If the strategies are mainly Chinese, or Chinese with some English technical terms or acronyms, output task_name in Chinese.
+- Treat terms such as SOTA, Attention, Tool-use, Video-MME, LibriTTS, VCTK and similar technical names as terminology, not as evidence that the strategies are English.
+- Only output all-English task_name values when the strategies are predominantly written in English sentences.
+- You may keep well-known English acronyms or benchmark names inside otherwise Chinese task_name values when necessary.
 
 Strategies:
 {strategies}
@@ -232,6 +240,8 @@ STRICT OUTPUT RULES
 - Output ONLY JSON
 - No explanations
 - No markdown
+- No reasoning text
+- Keep the JSON compact and do not add extra fields
 """
     return prompt
 

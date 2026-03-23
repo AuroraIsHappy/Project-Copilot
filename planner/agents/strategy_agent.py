@@ -37,6 +37,9 @@ You are a senior product and project strategist.
 
 Your task is to analyze an OKR (Objective and Key Results) and produce a set of high-level strategies that would realistically achieve the Key Results.
 
+Use fast, practical judgment and produce a good-enough strategy set in one pass.
+Do not search for the perfect decomposition.
+
 Follow these reasoning steps internally:
 
 1. Understand the Objective.
@@ -51,8 +54,11 @@ STRATEGY GUIDELINES
 - Each strategy should represent a meaningful approach to achieving the OKR.
 - Strategies should be concrete and actionable.
 - Avoid vague statements.
-- A typical OKR should result in 3–6 strategies.
+- Prefer 3-5 strategies.
+- Do not exceed 5 strategies unless the OKR clearly contains multiple independent workstreams.
 - Strategies should cover different aspects of the project if possible.
+- Keep each strategy_name short and direct.
+- Merge nearby ideas instead of splitting them into overly fine-grained strategies.
 
 INPUT FORMAT
 
@@ -60,10 +66,11 @@ INPUT FORMAT
 
 LANGUAGE RULE
 
-- Detect the OKR language from user input.
-- If the OKR is Chinese, output all strategy_name values in Chinese.
-- If the OKR is English, output all strategy_name values in English.
-- Do not mix Chinese and English in strategy_name values.
+- Determine the dominant language from the full OKR sentence structure, not from isolated technical terms, acronyms, benchmark names, or product names.
+- If the OKR is mainly Chinese, or Chinese with some English technical terms or acronyms, output all strategy_name values in Chinese.
+- Treat terms such as SOTA, Attention, Tool-use, Video-MME, LibriTTS, VCTK and similar technical names as terminology, not as evidence that the OKR language is English.
+- Only output all-English strategy_name values when the OKR is predominantly written in English sentences.
+- Do not switch the main output language because of a few English nouns.
 
 OKR:
 {okr}
@@ -83,6 +90,7 @@ STRICT OUTPUT RULES
 - No explanations
 - No markdown
 - No text outside JSON
+- No reasoning text
 """
 
     return prompt

@@ -179,6 +179,7 @@ def review_refine_prompt(tasks: list[dict], dependencies: list[dict], target_tot
             horizon_rule = (
                 f"- The revised plan should keep the total project timeline close to {normalized_weeks} weeks.\n"
                 "- If the current plan violates this horizon, adjust durations and dependency overlap/lag to move it closer.\n"
+                "- Close enough is sufficient; do not search for an exact optimum.\n"
             )
 
     prompt = f"""
@@ -190,6 +191,10 @@ In one pass, you must:
 2) suggest improvements
 3) return an improved plan
 
+Use fast, practical judgment.
+If the current plan is already broadly workable, make the smallest useful revision set.
+Do not redesign the whole plan unless there is a clear structural problem.
+
 Do reasoning internally and output only JSON.
 
 CRITIQUE RULES
@@ -198,12 +203,16 @@ CRITIQUE RULES
 - Keep issues concise and specific.
 - Keep suggestions actionable.
 - Only list issues that you will actually fix in this same output.
+- Limit issues to at most 3.
+- Limit suggestions to at most 3.
 
 - Improve the plan without excessive rewriting.
 - Keep task IDs stable whenever possible.
 - Preserve reasonable task names and intent.
 - Keep dependency logic valid and acyclic.
 - Use integer week-based durations and constraints only.
+- Prefer adjusting existing durations or dependencies over adding new tasks.
+- Add a new task only when a critical project phase is truly missing.
 
 ISSUE-COVERAGE RULES (MANDATORY)
 
@@ -216,14 +225,16 @@ DEPENDENCY RULES
 - overlap_weeks must be >= 0.
 - lag_weeks can be negative, zero, or positive.
 - Use only task IDs that exist in output tasks.
+- Keep dependencies sparse and include only the links needed to preserve execution logic.
 {horizon_rule}
 
 LANGUAGE RULE
 
-- Detect language from input task_name values.
-- If input tasks are Chinese, output task_name/issues/suggestions in Chinese.
-- If input tasks are English, output task_name/issues/suggestions in English.
-- Do not mix Chinese and English.
+- Determine the dominant language from the full task text, not from isolated technical terms, acronyms, benchmark names, or product names.
+- If the input tasks are mainly Chinese, or Chinese with some English technical terms or acronyms, output task_name/issues/suggestions in Chinese.
+- Treat terms such as SOTA, token, RLHF, Attention, Tool-use, Video-MME, LibriTTS, VCTK and similar technical names as terminology, not as evidence that the plan language is English.
+- Only output all-English task_name/issues/suggestions when the input plan is predominantly written in English sentences.
+- You may keep well-known English acronyms or benchmark names inside otherwise Chinese task_name values when necessary.
 
 Tasks:
 {tasks}
@@ -263,6 +274,8 @@ STRICT OUTPUT RULES
 - Output ONLY JSON
 - No explanations
 - No markdown
+- No reasoning text
+- Keep the JSON compact and do not add extra fields
 """
     return prompt
 
