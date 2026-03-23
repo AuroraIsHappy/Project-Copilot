@@ -304,6 +304,22 @@ def inject_styles() -> None:
             box-shadow: none;
         }
 
+        /* Sidebar project delete icon: keep it large and readable. */
+        [class*="st-key-proj_del_"]:not([class*="st-key-proj_del_confirm_"]):not([class*="st-key-proj_del_cancel_"]) button {
+            min-height: 2.2rem;
+            min-width: 2.2rem;
+            padding: 0.18rem 0.35rem;
+            border-radius: 10px;
+            font-size: 1.2rem;
+            line-height: 1;
+            font-weight: 700;
+        }
+
+        [class*="st-key-proj_del_"]:not([class*="st-key-proj_del_confirm_"]):not([class*="st-key-proj_del_cancel_"]) button p {
+            font-size: 1.2rem;
+            line-height: 1;
+        }
+
         /* Top assistant launcher: match the hero card height without affecting other buttons */
         [class*="st-key-assistant_open_btn_"] button,
         [class*="st-key-assistant_close_btn_"] button {
@@ -1428,7 +1444,7 @@ def render_project_nav() -> str | None:
         pname = project["name"]
         is_active = pid == active_id
 
-        col_btn, col_del = st.sidebar.columns([4, 1], gap="small")
+        col_btn, col_del = st.sidebar.columns([4.6, 1.4], gap="small")
         with col_btn:
             label = f"**{pname}**" if is_active else pname
             if st.button(label, key=f"proj_select_{pid}", use_container_width=True):
@@ -1437,7 +1453,7 @@ def render_project_nav() -> str | None:
                     st.session_state.kr_expand_state = {}
                     st.rerun()
         with col_del:
-            if st.button("🗑", key=f"proj_del_{pid}", help=f"删除「{pname}」"):
+            if st.button("🗑️", key=f"proj_del_{pid}", help=f"删除「{pname}」"):
                 st.session_state[f"confirm_delete_{pid}"] = True
                 st.rerun()
 
