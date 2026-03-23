@@ -3078,7 +3078,7 @@ def _coerce_operation_task_refs_from_user_text(tasks: list[dict], user_text: str
     target_indices = [
         index
         for index, op in enumerate(operations)
-        if str((op or {}).get("kind", "")).strip().lower() in {"task_update", "task_delete", "task_extend"}
+        if str((op or {}).get("kind", "")).strip().lower() in {"task_update", "task_delete", "task_extend", "task_shorten"}
     ]
     if not target_indices:
         return operations
@@ -3235,7 +3235,7 @@ def _freeze_operation_targets(tasks: list[dict], operations: list[dict]) -> list
         frozen_operation = dict(operation)
         kind = str(frozen_operation.get("kind", "")).strip().lower()
 
-        if kind in {"task_update", "task_delete", "task_extend"}:
+        if kind in {"task_update", "task_delete", "task_extend", "task_shorten"}:
             task_id, task_name, requested_task_ref = _freeze_task_target(
                 tasks,
                 frozen_operation.get("task_id"),
@@ -3361,6 +3361,26 @@ def _try_parse_direct_task_rename(text: str) -> dict | None:
         new_name = str(match.group(2) or "").strip().strip("。；;！!")
         if task_id and new_name:
             return {"task_id": task_id, "new_name": new_name}
+    return None
+
+
+def _try_parse_direct_owner_change(text: str) -> dict | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    patterns = [
+        rf"(?:把|将)?\s*{_TASK_REF_TOKEN_PATTERN}\s*(?:的)?(?:负责人|owner)\s*(?:改为|改成|设为|设置为|调整为|换成)\s*[：: ]?(.+)$",
+        rf"^{_TASK_REF_TOKEN_PATTERN}\s*(?:的)?(?:负责人|owner)\s*(?:改为|改成|设为|设置为|调整为|换成)\s*[：: ]?(.+)$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        task_id = _normalize_task_ref_text(match.group(1))
+        new_owner = str(match.group(2) or "").strip().strip("。；;！!")
+        if task_id and new_owner:
+            return {"task_id": task_id, "owner": new_owner}
     return None
 
 
@@ -3494,6 +3514,32 @@ def _try_parse_direct_duration_extend(text: str) -> dict | None:
     return {"task_id": task_id, "delta_days": delta_days}
 
 
+def _try_parse_direct_duration_shorten(text: str) -> dict | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    patterns = [
+        rf"(?:把|将)?\s*{_TASK_REF_TOKEN_PATTERN}\s*(?:的)?(?:时间|工期|时长|排期|duration)?\s*(?:缩短|减少|压缩)\s*([一二两三四五六七八九十\d]+)\s*(天|周)",
+        rf"(?:把|将)?\s*{_TASK_REF_TOKEN_PATTERN}\s*(?:的)?(?:时间|工期|时长|排期|duration)?\s*(?:提前结束|提前完成)\s*([一二两三四五六七八九十\d]+)\s*(天|周)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+
+        task_id = _normalize_task_ref_text(match.group(1))
+        amount = _parse_cn_number(str(match.group(2) or "").strip())
+        unit = str(match.group(3) or "天").strip()
+        if not task_id or amount is None or amount <= 0:
+            continue
+
+        delta_days = amount * (7 if unit == "周" else 1)
+        return {"task_id": task_id, "delta_days": delta_days}
+
+    return None
+
+
 def _parse_week_range(text: str) -> tuple[int, int] | None:
     raw = str(text or "").strip()
     if not raw:
@@ -3565,6 +3611,11 @@ def _parse_compound_operations(text: str) -> list[dict]:
             operations.append({"kind": "task_extend", **extend, "need_reschedule": True})
             continue
 
+        shorten = _try_parse_direct_duration_shorten(clause)
+        if shorten:
+            operations.append({"kind": "task_shorten", **shorten, "need_reschedule": True})
+            continue
+
         schedule_change = _try_parse_direct_schedule_window_change(clause)
         if schedule_change:
             operations.append(
@@ -3589,6 +3640,19 @@ def _parse_compound_operations(text: str) -> list[dict]:
                     "task_id": rename["task_id"],
                     "task_name": "",
                     "updates": {"task": rename["new_name"]},
+                    "need_reschedule": False,
+                }
+            )
+            continue
+
+        owner_change = _try_parse_direct_owner_change(clause)
+        if owner_change:
+            operations.append(
+                {
+                    "kind": "task_update",
+                    "task_id": owner_change["task_id"],
+                    "task_name": "",
+                    "updates": {"owner": owner_change["owner"]},
                     "need_reschedule": False,
                 }
             )
@@ -3647,6 +3711,8 @@ def _summarize_operations(tasks: list[dict], operations: list[dict]) -> str:
             schedule_label = _updates_schedule_window_label(updates)
             if schedule_label:
                 lines.append(f"- 修改任务排期：{target}，{schedule_label}")
+            elif "owner" in updates and len(updates) == 1:
+                lines.append(f"- 修改任务负责人：{target}，{updates.get('owner', '')}")
             else:
                 lines.append(f"- 修改任务：{target}，updates={updates}")
         elif kind == "task_extend":
@@ -3657,6 +3723,14 @@ def _summarize_operations(tasks: list[dict], operations: list[dict]) -> str:
                 op.get("requested_task_ref"),
             )
             lines.append(f"- 延长工期：{target}，+{op.get('delta_days', 0)}天")
+        elif kind == "task_shorten":
+            target = _format_task_target_preview(
+                tasks,
+                op.get("task_id"),
+                op.get("task_name"),
+                op.get("requested_task_ref"),
+            )
+            lines.append(f"- 缩短工期：{target}，-{op.get('delta_days', 0)}天")
         elif kind == "dependency_update":
             dep = op.get("dependency_change", {}) if isinstance(op.get("dependency_change"), dict) else {}
             source = _format_dependency_endpoint_preview(tasks, dep, "from")
@@ -3803,6 +3877,22 @@ def _apply_operation_on_snapshot(tasks: list[dict], dependencies: list[dict], op
         new_days = old_days + delta_days
         _set_task_duration_days(tasks[idx], new_days)
         summary = f"已延长任务 {tasks[idx].get('task_id', '')} 工期：{old_days}天 -> {new_days}天"
+        return tasks, dependencies, summary, True, None
+
+    if kind == "task_shorten":
+        idx = _find_task_index(tasks, operation.get("task_id"), operation.get("task_name"))
+        if idx < 0:
+            return tasks, dependencies, "", False, "未找到要缩短工期的任务。"
+        try:
+            delta_days = max(1, int(operation.get("delta_days", 0) or 0))
+        except (TypeError, ValueError):
+            return tasks, dependencies, "", False, "缩短工期的天数无效。"
+        old_days = max(1, int(tasks[idx].get("duration_days", 7) or 7))
+        if old_days <= 1:
+            return tasks, dependencies, "", False, "任务工期已经是最短 1 天，无法继续缩短。"
+        new_days = max(1, old_days - delta_days)
+        _set_task_duration_days(tasks[idx], new_days)
+        summary = f"已缩短任务 {tasks[idx].get('task_id', '')} 工期：{old_days}天 -> {new_days}天"
         return tasks, dependencies, summary, True, None
 
     idx = _find_task_index(tasks, operation.get("task_id"), operation.get("task_name"))
@@ -4102,6 +4192,37 @@ def _apply_pending_change(project_id: str, pending: dict) -> dict:
         save_tasks(final_tasks, project_id, dependencies=dependencies)
 
         summary = f"已延长任务 {tasks[idx].get('task_id', '')} 工期：{old_days}天 -> {new_days}天；并已重新排期。"
+        assistant_state = load_project_assistant_state(project_id)
+        actions = assistant_state.get("last_actions", [])[-19:]
+        actions.append({"summary": summary, "ts": _now_iso()})
+        save_project_assistant_state(project_id, last_actions=actions, clear_pending_change=True)
+        return {
+            "status": "ok",
+            "message": summary,
+            "changed_task_id": tasks[idx].get("task_id", ""),
+            "rescheduled": True,
+        }
+
+    if change_kind == "task_shorten":
+        idx = _find_task_index(tasks, pending.get("task_id"), pending.get("task_name"))
+        if idx < 0:
+            return {"status": "error", "message": "未找到要缩短工期的任务。"}
+
+        try:
+            delta_days = max(1, int(pending.get("delta_days", 0) or 0))
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "缩短工期的天数无效。"}
+
+        old_days = max(1, int(tasks[idx].get("duration_days", 7) or 7))
+        if old_days <= 1:
+            return {"status": "error", "message": "任务工期已经是最短 1 天，无法继续缩短。"}
+        new_days = max(1, old_days - delta_days)
+        _set_task_duration_days(tasks[idx], new_days)
+
+        final_tasks = schedule_tasks(tasks, dependencies=dependencies)
+        save_tasks(final_tasks, project_id, dependencies=dependencies)
+
+        summary = f"已缩短任务 {tasks[idx].get('task_id', '')} 工期：{old_days}天 -> {new_days}天；并已重新排期。"
         assistant_state = load_project_assistant_state(project_id)
         actions = assistant_state.get("last_actions", [])[-19:]
         actions.append({"summary": summary, "ts": _now_iso()})
@@ -4441,7 +4562,9 @@ def _build_assistant_system_prompt(
     "operations": [
         {{"kind": "task_add", "task": "...", "duration_days": 7, "owner": "Unassigned", "need_reschedule": true}},
         {{"kind": "dependency_update", "dependency_change": {{"action": "add", "from": "T2", "to": "T7", "type": "FS", "lag_weeks": 0, "overlap_weeks": 0}}}},
-                {{"kind": "task_update", "task_id": "T9", "updates": {{"start_week": 7, "end_week": 8}}, "need_reschedule": true}}
+        {{"kind": "task_extend", "task_id": "T5", "delta_days": 7, "need_reschedule": true}},
+        {{"kind": "task_shorten", "task_id": "T5", "delta_days": 7, "need_reschedule": true}},
+        {{"kind": "task_update", "task_id": "T9", "updates": {{"start_week": 7, "end_week": 8}}, "need_reschedule": true}}
     ],
     "dependency_change": {{
         "action": "add" | "remove" | "update",
@@ -4462,6 +4585,7 @@ def _build_assistant_system_prompt(
 - 若用户要求改依赖，请优先使用 dependency_change，不要放到 change。
 - 当用户只是提问，不要生成 change。
 - 若仅是改任务名/负责人/进度/状态，need_reschedule 应为 false。
+- 若用户表达“延长工期/缩短工期/提前结束”，可优先用 operations 里的 task_extend/task_shorten 表达。
 - 当用户明确说“改为 W7-W8 / 第7周到第8周”这类排期窗口时，使用 updates.start_week / updates.end_week，并将 need_reschedule 设为 true。
 - 对“新增任务/删除任务”的需求，优先用 change.action=add/delete，不要触发 replan。
 - 当一句话包含多个可执行修改时，优先输出 operations（长度>=2），并保持执行顺序。
@@ -4608,7 +4732,9 @@ def assistant_chat(
 
     tasks = load_tasks(project_id)
     dependencies = load_dependencies(project_id)
+    compound_clauses = _split_compound_clauses(text)
     compound_ops = _parse_compound_operations(text)
+    has_partial_compound_parse = len(compound_clauses) >= 2 and len(compound_ops) != len(compound_clauses)
     if len(compound_ops) >= 2:
         compound_ops = _freeze_operation_targets(tasks, compound_ops)
         pending_change = {
@@ -4637,7 +4763,7 @@ def assistant_chat(
             "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
         }
 
-    direct_rename = _try_parse_direct_task_rename(text)
+    direct_rename = None if has_partial_compound_parse else _try_parse_direct_task_rename(text)
     if direct_rename:
         task_id, task_name, requested_task_ref = _freeze_task_target(tasks, direct_rename["task_id"], "")
         pending_change = {
@@ -4675,7 +4801,45 @@ def assistant_chat(
             "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
         }
 
-    direct_add = _try_parse_direct_task_add(text)
+    direct_owner_change = None if has_partial_compound_parse else _try_parse_direct_owner_change(text)
+    if direct_owner_change:
+        task_id, task_name, requested_task_ref = _freeze_task_target(tasks, direct_owner_change["task_id"], "")
+        pending_change = {
+            "kind": "task_update",
+            "task_id": task_id,
+            "task_name": task_name,
+            "requested_task_ref": requested_task_ref,
+            "updates": {"owner": direct_owner_change["owner"]},
+            "need_reschedule": False,
+            "requested_at": _now_iso(),
+        }
+        save_project_assistant_state(project_id, pending_change=pending_change)
+        target_preview = _format_task_target_preview(
+            tasks,
+            pending_change.get("task_id"),
+            pending_change.get("task_name"),
+            pending_change.get("requested_task_ref"),
+        )
+        reply = (
+            f"已生成待执行负责人修改：目标任务={target_preview}，"
+            f"新负责人={direct_owner_change['owner']}。\n\n"
+            "这不会触发整盘重规划。回复“确认执行”才会落盘，回复“取消执行”可撤销这次修改。"
+        )
+        if memory_note:
+            reply = memory_note + "\n\n" + reply
+        history = history[-29:]
+        history.append({"role": "user", "content": text, "ts": user_ts})
+        history.append({"role": "assistant", "content": reply, "ts": _now_iso()})
+        save_project_assistant_state(project_id, chat_history=history)
+        return {
+            "status": "ok",
+            "reply": reply,
+            "pending_change": pending_change,
+            "executed": False,
+            "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
+        }
+
+    direct_add = None if has_partial_compound_parse else _try_parse_direct_task_add(text)
     if direct_add:
         pending_change = {
             "kind": "task_add",
@@ -4705,7 +4869,7 @@ def assistant_chat(
             "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
         }
 
-    direct_delete = _try_parse_direct_task_delete(text)
+    direct_delete = None if has_partial_compound_parse else _try_parse_direct_task_delete(text)
     if direct_delete:
         task_id, task_name, requested_task_ref = _freeze_task_target(
             tasks,
@@ -4745,7 +4909,7 @@ def assistant_chat(
             "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
         }
 
-    direct_schedule_change = _try_parse_direct_schedule_window_change(text)
+    direct_schedule_change = None if has_partial_compound_parse else _try_parse_direct_schedule_window_change(text)
     if direct_schedule_change:
         task_id, task_name, requested_task_ref = _freeze_task_target(
             tasks,
@@ -4794,7 +4958,7 @@ def assistant_chat(
             "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
         }
 
-    direct_extend = _try_parse_direct_duration_extend(text)
+    direct_extend = None if has_partial_compound_parse else _try_parse_direct_duration_extend(text)
     if direct_extend:
         task_id, task_name, requested_task_ref = _freeze_task_target(
             tasks,
@@ -4823,6 +4987,51 @@ def assistant_chat(
         reply = (
             f"已生成待执行延长工期：目标任务={target_preview}，"
             f"延长 {delta_weeks} 周（{delta_days} 天）。\n\n"
+            "回复“确认执行”才会落盘并重排期，回复“取消执行”可撤销这次修改。"
+        )
+        if memory_note:
+            reply = memory_note + "\n\n" + reply
+        history = history[-29:]
+        history.append({"role": "user", "content": text, "ts": user_ts})
+        history.append({"role": "assistant", "content": reply, "ts": _now_iso()})
+        save_project_assistant_state(project_id, chat_history=history)
+        return {
+            "status": "ok",
+            "reply": reply,
+            "pending_change": pending_change,
+            "executed": False,
+            "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
+        }
+
+    direct_shorten = None if has_partial_compound_parse else _try_parse_direct_duration_shorten(text)
+    if direct_shorten:
+        task_id, task_name, requested_task_ref = _freeze_task_target(
+            tasks,
+            str(direct_shorten.get("task_id", "")).strip(),
+            "",
+        )
+        pending_change = {
+            "kind": "task_shorten",
+            "task_id": task_id,
+            "task_name": task_name,
+            "requested_task_ref": requested_task_ref,
+            "delta_days": int(direct_shorten.get("delta_days", 0) or 0),
+            "need_reschedule": True,
+            "requested_at": _now_iso(),
+        }
+        save_project_assistant_state(project_id, pending_change=pending_change)
+
+        delta_days = int(pending_change.get("delta_days", 0) or 0)
+        delta_weeks = max(1, (delta_days + 6) // 7)
+        target_preview = _format_task_target_preview(
+            tasks,
+            pending_change.get("task_id"),
+            pending_change.get("task_name"),
+            pending_change.get("requested_task_ref"),
+        )
+        reply = (
+            f"已生成待执行缩短工期：目标任务={target_preview}，"
+            f"缩短 {delta_weeks} 周（{delta_days} 天）。\n\n"
             "回复“确认执行”才会落盘并重排期，回复“取消执行”可撤销这次修改。"
         )
         if memory_note:
@@ -4946,6 +5155,20 @@ def assistant_chat(
                         "need_reschedule": bool(op.get("need_reschedule", True)),
                     }
                 )
+            elif kind == "task_shorten":
+                try:
+                    delta_days = int(op.get("delta_days", 0) or 0)
+                except (TypeError, ValueError):
+                    delta_days = 0
+                normalized_ops.append(
+                    {
+                        "kind": "task_shorten",
+                        "task_id": _normalize_task_ref_text(op.get("task_id")),
+                        "task_name": str(op.get("task_name", "")).strip(),
+                        "delta_days": delta_days,
+                        "need_reschedule": bool(op.get("need_reschedule", True)),
+                    }
+                )
             elif kind == "dependency_update" and isinstance(op.get("dependency_change"), dict):
                 dep_change = dict(op.get("dependency_change") or {})
                 dep_change["from"] = _normalize_task_ref_text(dep_change.get("from"))
@@ -4978,10 +5201,11 @@ def assistant_chat(
                 "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
             }
 
-        if len(normalized_ops) == 1 and str(normalized_ops[0].get("kind", "")).strip().lower() == "task_extend":
+        if len(normalized_ops) == 1 and str(normalized_ops[0].get("kind", "")).strip().lower() in {"task_extend", "task_shorten"}:
             op = normalized_ops[0]
+            normalized_kind = str(op.get("kind", "")).strip().lower() or "task_extend"
             pending_change = {
-                "kind": "task_extend",
+                "kind": normalized_kind,
                 "task_id": _normalize_task_ref_text(op.get("task_id")),
                 "task_name": str(op.get("task_name", "")).strip(),
                 "requested_task_ref": _normalize_task_ref_text(op.get("requested_task_ref")),
