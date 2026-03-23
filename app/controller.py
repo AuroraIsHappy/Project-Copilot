@@ -2021,10 +2021,14 @@ def _days_to_weeks(raw_value, *, allow_negative: bool) -> int:
 
 def _compact_tasks(tasks: list[dict], limit: int = 40) -> list[dict]:
     compact: list[dict] = []
+    display_ref_by_id = _build_task_id_display_ref_map(tasks)
     for task in tasks[:limit]:
+        task_id = str(task.get("task_id") or "").strip()
+        task_ref = display_ref_by_id.get(task_id) or _task_ref_label(task)
         compact.append(
             {
-                "task_id": task.get("task_id", ""),
+                "task_id": task_id,
+                "display_ref": task_ref,
                 "task": task.get("task", ""),
                 "owner": task.get("owner", ""),
                 "status": task.get("status", "Planned"),
@@ -2192,8 +2196,87 @@ def _parse_iso_date(value: str) -> date | None:
         return None
 
 
-def _task_ref_label(task: dict) -> str:
+def _parse_task_ref_kr_index(kr_name: str) -> int:
+    match = re.match(r"\s*kr\s*(\d+)", str(kr_name or ""), re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 10**6
+
+
+def _task_display_sort_key(task: dict) -> tuple:
+    kr_name = str(task.get("kr", "KR1: Execution")).strip() or "KR1: Execution"
+    kr_index = task.get("kr_index")
+    try:
+        kr_index = int(kr_index) if kr_index is not None else _parse_task_ref_kr_index(kr_name)
+    except (TypeError, ValueError):
+        kr_index = _parse_task_ref_kr_index(kr_name)
+
+    subtask_index = task.get("subtask_index")
+    try:
+        subtask_index = int(subtask_index) if subtask_index is not None else 10**6
+    except (TypeError, ValueError):
+        subtask_index = 10**6
+
+    start_value = _parse_iso_date(task.get("start", "")) or date.max
+    end_value = _parse_iso_date(task.get("end", "")) or date.max
+    return (
+        start_value,
+        end_value,
+        kr_index,
+        subtask_index,
+        str(task.get("task", "")),
+    )
+
+
+def _resolve_task_display_kr_index(kr_name: str, kr_tasks: list[dict]) -> int | None:
+    for task in kr_tasks:
+        kr_index = task.get("kr_index")
+        try:
+            if kr_index is not None:
+                return int(kr_index)
+        except (TypeError, ValueError):
+            continue
+
+    parsed_index = _parse_task_ref_kr_index(kr_name)
+    return None if parsed_index == 10**6 else parsed_index
+
+
+def _build_task_id_display_ref_map(tasks: list[dict]) -> dict[str, str]:
+    grouped: dict[str, list[dict]] = {}
+    for task in tasks if isinstance(tasks, list) else []:
+        if not isinstance(task, dict):
+            continue
+        kr_name = str(task.get("kr", "KR1: Execution")).strip() or "KR1: Execution"
+        grouped.setdefault(kr_name, []).append(task)
+
+    mapping: dict[str, str] = {}
+    for kr_name, kr_tasks in grouped.items():
+        sorted_tasks = sorted(kr_tasks, key=_task_display_sort_key)
+        display_kr_index = _resolve_task_display_kr_index(kr_name, sorted_tasks)
+
+        for sequence_number, task in enumerate(sorted_tasks, start=1):
+            task_id = str(task.get("task_id") or "").strip()
+            if not task_id:
+                continue
+            if display_kr_index is None:
+                mapping[task_id] = task_id
+            else:
+                mapping[task_id] = f"{display_kr_index}.{sequence_number}"
+
+    return mapping
+
+
+def _task_ref_label(task: dict, tasks: list[dict] | None = None, display_ref_by_id: dict[str, str] | None = None) -> str:
     task_id = str(task.get("task_id") or "").strip() or "Unknown"
+    if isinstance(display_ref_by_id, dict):
+        mapped_ref = str(display_ref_by_id.get(task_id) or "").strip()
+        if mapped_ref:
+            return mapped_ref
+    elif isinstance(tasks, list):
+        mapped_ref = str(_build_task_id_display_ref_map(tasks).get(task_id) or "").strip()
+        if mapped_ref:
+            return mapped_ref
+
     try:
         kr_idx = int(task.get("kr_index"))
         sub_idx = int(task.get("subtask_index"))
@@ -2883,6 +2966,7 @@ def _build_global_risk_focus_reply(*, top_items: int = _GLOBAL_RISK_TOP_ITEMS) -
 
 _TASK_REF_CORE_PATTERN = r"(?:T\d+|\d+\.\d+)"
 _TASK_REF_TOKEN_PATTERN = r"((?:(?:第\s*)?(?:任务|task)\s*)?(?:T\d+|\d+\.\d+)(?:\s*(?:个)?(?:任务|task))?)"
+_STRONG_TASK_REF_TOKEN_PATTERN = r"(?:(?:第\s*)?(?:任务|task)\s*(T\d+|\d+\.\d+)|(?<![A-Za-z0-9])(T\d+)(?!\d))"
 
 
 def _normalize_task_ref_text(ref: str | None) -> str:
@@ -2909,6 +2993,13 @@ def _normalize_task_ref_text(ref: str | None) -> str:
     return normalized
 
 
+def _is_task_ref_token(text: str | None) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    return bool(re.fullmatch(rf"{_TASK_REF_TOKEN_PATTERN}", raw, flags=re.IGNORECASE))
+
+
 def _parse_display_ref(ref: str) -> tuple[int, int] | None:
     raw = _normalize_task_ref_text(ref)
     match = re.match(r"^(\d+)\.(\d+)$", raw)
@@ -2922,19 +3013,93 @@ def _parse_display_ref(ref: str) -> tuple[int, int] | None:
 
 def _task_display_ref_map(tasks: list[dict]) -> dict[str, str]:
     mapping: dict[str, str] = {}
-    for task in tasks:
-        task_id = str(task.get("task_id", "")).strip()
-        if not task_id:
+    for task_id, display_ref in _build_task_id_display_ref_map(tasks).items():
+        normalized_display_ref = _normalize_task_ref_text(display_ref)
+        if not normalized_display_ref or normalized_display_ref == task_id:
             continue
-        try:
-            kr_idx = int(task.get("kr_index"))
-            sub_idx = int(task.get("subtask_index"))
-        except (TypeError, ValueError):
-            continue
-        if kr_idx <= 0 or sub_idx <= 0:
-            continue
-        mapping[f"{kr_idx}.{sub_idx}"] = task_id
+        mapping[normalized_display_ref] = task_id
     return mapping
+
+
+def _task_ref_exists(tasks: list[dict], ref: str | None) -> bool:
+    normalized = _normalize_task_ref_text(ref)
+    if not normalized:
+        return False
+    if normalized in _task_display_ref_map(tasks):
+        return True
+    normalized_lower = normalized.lower()
+    for task in tasks:
+        if str(task.get("task_id", "")).strip().lower() == normalized_lower:
+            return True
+    return False
+
+
+def _extract_explicit_task_refs_from_text(text: str, tasks: list[dict]) -> list[str]:
+    refs: list[str] = []
+    raw_text = str(text or "")
+    if not raw_text.strip() or not isinstance(tasks, list) or not tasks:
+        return refs
+
+    for match in re.finditer(_STRONG_TASK_REF_TOKEN_PATTERN, raw_text, flags=re.IGNORECASE):
+        candidate = _normalize_task_ref_text(match.group(1) or match.group(2) or "")
+        if not candidate or not _task_ref_exists(tasks, candidate):
+            continue
+        refs.append(candidate)
+
+    return refs
+
+
+def _coerce_single_task_ref_from_user_text(
+    tasks: list[dict],
+    user_text: str,
+    task_id: str | None,
+    task_name: str | None,
+) -> tuple[str, str]:
+    normalized_task_id = _normalize_task_ref_text(task_id)
+    normalized_task_name = str(task_name or "").strip()
+    explicit_refs = _extract_explicit_task_refs_from_text(user_text, tasks)
+    if len(explicit_refs) != 1:
+        return normalized_task_id, normalized_task_name
+
+    coerced_ref = explicit_refs[0]
+    if _is_task_ref_token(normalized_task_name):
+        normalized_task_name = ""
+    return coerced_ref, normalized_task_name
+
+
+def _coerce_operation_task_refs_from_user_text(tasks: list[dict], user_text: str, operations: list[dict]) -> list[dict]:
+    if not isinstance(operations, list) or not operations:
+        return []
+
+    explicit_refs = _extract_explicit_task_refs_from_text(user_text, tasks)
+    if not explicit_refs:
+        return operations
+
+    target_indices = [
+        index
+        for index, op in enumerate(operations)
+        if str((op or {}).get("kind", "")).strip().lower() in {"task_update", "task_delete", "task_extend"}
+    ]
+    if not target_indices:
+        return operations
+
+    if len(explicit_refs) == 1 and len(target_indices) == 1:
+        assigned_refs = explicit_refs
+    elif len(explicit_refs) == len(target_indices):
+        assigned_refs = explicit_refs
+    else:
+        return operations
+
+    coerced_operations = [dict(op) if isinstance(op, dict) else op for op in operations]
+    for op_index, explicit_ref in zip(target_indices, assigned_refs):
+        op = coerced_operations[op_index]
+        if not isinstance(op, dict):
+            continue
+        op["task_id"] = explicit_ref
+        if _is_task_ref_token(op.get("task_name")):
+            op["task_name"] = ""
+
+    return coerced_operations
 
 
 def _resolve_task_id_ref(tasks: list[dict], ref: str | None) -> str:
@@ -2986,6 +3151,117 @@ def _find_task_index(tasks: list[dict], task_id: str | None, task_name: str | No
             return fuzzy_matches[0]
 
     return -1
+
+
+def _freeze_task_target(
+    tasks: list[dict],
+    task_id: str | None,
+    task_name: str | None,
+) -> tuple[str, str, str]:
+    normalized_task_id = _normalize_task_ref_text(task_id)
+    normalized_task_name = str(task_name or "").strip()
+
+    idx = _find_task_index(tasks, normalized_task_id, normalized_task_name)
+    if idx < 0:
+        return normalized_task_id, normalized_task_name, ""
+
+    resolved_task_id = str(tasks[idx].get("task_id") or "").strip() or normalized_task_id
+    requested_task_ref = ""
+    if normalized_task_id and normalized_task_id.lower() != resolved_task_id.lower():
+        requested_task_ref = normalized_task_id
+    return resolved_task_id, normalized_task_name, requested_task_ref
+
+
+def _format_task_target_preview(
+    tasks: list[dict],
+    task_id: str | None,
+    task_name: str | None = None,
+    requested_task_ref: str | None = None,
+) -> str:
+    requested_ref = _normalize_task_ref_text(requested_task_ref) or _normalize_task_ref_text(task_id)
+    idx = _find_task_index(tasks, task_id, task_name)
+    if idx < 0:
+        fallback = requested_ref or str(task_name or "").strip()
+        return fallback or "(未识别目标任务)"
+
+    resolved_task = tasks[idx]
+    resolved_task_id = str(resolved_task.get("task_id") or "").strip()
+    resolved_task_name = str(resolved_task.get("task") or "").strip()
+
+    resolved_label = resolved_task_id or requested_ref or str(task_name or "").strip() or "(未识别目标任务)"
+    if resolved_task_name:
+        resolved_label = f"{resolved_label} ({resolved_task_name})"
+
+    if requested_ref and resolved_task_id and requested_ref.lower() != resolved_task_id.lower():
+        return f"{requested_ref} -> {resolved_label}"
+    return resolved_label
+
+
+def _freeze_dependency_change_task_refs(tasks: list[dict], dependency_change: dict) -> dict:
+    frozen_change = dict(dependency_change or {})
+    valid_task_ids = {
+        str(task.get("task_id") or "").strip()
+        for task in tasks
+        if str(task.get("task_id") or "").strip()
+    }
+
+    for field in ("from", "to"):
+        raw_ref = _normalize_task_ref_text(frozen_change.get(field))
+        if not raw_ref:
+            frozen_change[field] = ""
+            frozen_change.pop(f"requested_{field}_ref", None)
+            continue
+
+        resolved_ref = _resolve_task_id_ref(tasks, raw_ref)
+        if resolved_ref in valid_task_ids:
+            frozen_change[field] = resolved_ref
+            if raw_ref.lower() != resolved_ref.lower():
+                frozen_change[f"requested_{field}_ref"] = raw_ref
+            else:
+                frozen_change.pop(f"requested_{field}_ref", None)
+        else:
+            frozen_change[field] = raw_ref
+            frozen_change.pop(f"requested_{field}_ref", None)
+
+    return frozen_change
+
+
+def _freeze_operation_targets(tasks: list[dict], operations: list[dict]) -> list[dict]:
+    frozen_operations: list[dict] = []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+
+        frozen_operation = dict(operation)
+        kind = str(frozen_operation.get("kind", "")).strip().lower()
+
+        if kind in {"task_update", "task_delete", "task_extend"}:
+            task_id, task_name, requested_task_ref = _freeze_task_target(
+                tasks,
+                frozen_operation.get("task_id"),
+                frozen_operation.get("task_name"),
+            )
+            frozen_operation["task_id"] = task_id
+            frozen_operation["task_name"] = task_name
+            if requested_task_ref:
+                frozen_operation["requested_task_ref"] = requested_task_ref
+            else:
+                frozen_operation.pop("requested_task_ref", None)
+        elif kind == "dependency_update" and isinstance(frozen_operation.get("dependency_change"), dict):
+            frozen_operation["dependency_change"] = _freeze_dependency_change_task_refs(
+                tasks,
+                frozen_operation.get("dependency_change", {}),
+            )
+
+        frozen_operations.append(frozen_operation)
+
+    return frozen_operations
+
+
+def _format_dependency_endpoint_preview(tasks: list[dict], dependency_change: dict, field: str) -> str:
+    requested_ref = _normalize_task_ref_text(dependency_change.get(f"requested_{field}_ref"))
+    resolved_ref = str(dependency_change.get(field) or "").strip()
+    return _format_task_target_preview(tasks, resolved_ref or requested_ref, requested_task_ref=requested_ref)
 
 
 def _sanitize_update_fields(fields: dict) -> tuple[dict, str | None]:
@@ -3346,17 +3622,27 @@ def _parse_compound_operations(text: str) -> list[dict]:
     return operations
 
 
-def _summarize_operations(operations: list[dict]) -> str:
+def _summarize_operations(tasks: list[dict], operations: list[dict]) -> str:
     lines: list[str] = []
     for op in operations:
         kind = str(op.get("kind", "")).strip().lower()
         if kind == "task_add":
             lines.append(f"- 新增任务：{op.get('task', '')}")
         elif kind == "task_delete":
-            target = str(op.get("task_id") or op.get("task_name") or "")
+            target = _format_task_target_preview(
+                tasks,
+                op.get("task_id"),
+                op.get("task_name"),
+                op.get("requested_task_ref"),
+            )
             lines.append(f"- 删除任务：{target}")
         elif kind == "task_update":
-            target = str(op.get("task_id") or op.get("task_name") or "")
+            target = _format_task_target_preview(
+                tasks,
+                op.get("task_id"),
+                op.get("task_name"),
+                op.get("requested_task_ref"),
+            )
             updates = op.get("updates", {}) if isinstance(op.get("updates"), dict) else {}
             schedule_label = _updates_schedule_window_label(updates)
             if schedule_label:
@@ -3364,11 +3650,19 @@ def _summarize_operations(operations: list[dict]) -> str:
             else:
                 lines.append(f"- 修改任务：{target}，updates={updates}")
         elif kind == "task_extend":
-            lines.append(f"- 延长工期：{op.get('task_id', '')}，+{op.get('delta_days', 0)}天")
+            target = _format_task_target_preview(
+                tasks,
+                op.get("task_id"),
+                op.get("task_name"),
+                op.get("requested_task_ref"),
+            )
+            lines.append(f"- 延长工期：{target}，+{op.get('delta_days', 0)}天")
         elif kind == "dependency_update":
             dep = op.get("dependency_change", {}) if isinstance(op.get("dependency_change"), dict) else {}
+            source = _format_dependency_endpoint_preview(tasks, dep, "from")
+            target = _format_dependency_endpoint_preview(tasks, dep, "to")
             lines.append(
-                f"- 依赖变更：{dep.get('action', '')} {dep.get('from', '')}->{dep.get('to', '')} ({dep.get('type', 'FS')})"
+                f"- 依赖变更：{dep.get('action', '')} {source}->{target} ({dep.get('type', 'FS')})"
             )
     return "\n".join(lines)
 
@@ -4172,6 +4466,10 @@ def _build_assistant_system_prompt(
 - 对“新增任务/删除任务”的需求，优先用 change.action=add/delete，不要触发 replan。
 - 当一句话包含多个可执行修改时，优先输出 operations（长度>=2），并保持执行顺序。
 - task_id 同时支持内部编号（如 T9）、界面展示编号（如 2.1）以及带前缀写法（如 任务1.2、task 2.1）。
+- 当前任务列表中的 display_ref 就是界面展示编号。若用户提到“任务2.2”或“task 2.2”，优先按 display_ref 做精确匹配。
+- 当用户使用展示编号时，把该展示编号原样写入 task_id / dependency_change.from / dependency_change.to，例如用户说“任务2.2”就写 "2.2"。
+- 不要把一个展示编号改写成相邻编号或猜测成别的任务，例如不能把 2.2 改成 2.3。
+- 如果无法确认展示编号对应哪一个任务，输出 intent="clarify"，不要猜测。
 
 当前任务列表：
 {json.dumps(_compact_tasks(tasks), ensure_ascii=False)}
@@ -4312,13 +4610,14 @@ def assistant_chat(
     dependencies = load_dependencies(project_id)
     compound_ops = _parse_compound_operations(text)
     if len(compound_ops) >= 2:
+        compound_ops = _freeze_operation_targets(tasks, compound_ops)
         pending_change = {
             "kind": "batch_update",
             "operations": compound_ops,
             "requested_at": _now_iso(),
         }
         save_project_assistant_state(project_id, pending_change=pending_change)
-        preview = _summarize_operations(compound_ops)
+        preview = _summarize_operations(tasks, compound_ops)
         reply = (
             "我识别到你在一句话里提出了多个修改，已生成批量待执行操作：\n"
             f"{preview}\n\n"
@@ -4340,17 +4639,25 @@ def assistant_chat(
 
     direct_rename = _try_parse_direct_task_rename(text)
     if direct_rename:
+        task_id, task_name, requested_task_ref = _freeze_task_target(tasks, direct_rename["task_id"], "")
         pending_change = {
             "kind": "task_update",
-            "task_id": direct_rename["task_id"],
-            "task_name": "",
+            "task_id": task_id,
+            "task_name": task_name,
+            "requested_task_ref": requested_task_ref,
             "updates": {"task": direct_rename["new_name"]},
             "need_reschedule": False,
             "requested_at": _now_iso(),
         }
         save_project_assistant_state(project_id, pending_change=pending_change)
+        target_preview = _format_task_target_preview(
+            tasks,
+            pending_change.get("task_id"),
+            pending_change.get("task_name"),
+            pending_change.get("requested_task_ref"),
+        )
         reply = (
-            f"已生成待执行修改：目标任务={direct_rename['task_id']}，"
+            f"已生成待执行修改：目标任务={target_preview}，"
             f"新任务名={direct_rename['new_name']}。\n\n"
             "这不会触发整盘重规划。回复“确认执行”才会落盘，回复“取消执行”可撤销这次修改。"
         )
@@ -4400,15 +4707,26 @@ def assistant_chat(
 
     direct_delete = _try_parse_direct_task_delete(text)
     if direct_delete:
+        task_id, task_name, requested_task_ref = _freeze_task_target(
+            tasks,
+            str(direct_delete.get("task_id", "")).strip(),
+            str(direct_delete.get("task_name", "")).strip(),
+        )
         pending_change = {
             "kind": "task_delete",
-            "task_id": str(direct_delete.get("task_id", "")).strip(),
-            "task_name": str(direct_delete.get("task_name", "")).strip(),
+            "task_id": task_id,
+            "task_name": task_name,
+            "requested_task_ref": requested_task_ref,
             "need_reschedule": True,
             "requested_at": _now_iso(),
         }
         save_project_assistant_state(project_id, pending_change=pending_change)
-        target = pending_change["task_id"] or pending_change["task_name"] or "未识别"
+        target = _format_task_target_preview(
+            tasks,
+            pending_change.get("task_id"),
+            pending_change.get("task_name"),
+            pending_change.get("requested_task_ref"),
+        )
         reply = (
             f"已生成待执行删除：目标任务={target}。\n\n"
             "这是局部删除任务，不会触发整盘重规划。回复“确认执行”才会落盘，回复“取消执行”可撤销这次修改。"
@@ -4429,10 +4747,16 @@ def assistant_chat(
 
     direct_schedule_change = _try_parse_direct_schedule_window_change(text)
     if direct_schedule_change:
+        task_id, task_name, requested_task_ref = _freeze_task_target(
+            tasks,
+            str(direct_schedule_change.get("task_id", "")).strip(),
+            "",
+        )
         pending_change = {
             "kind": "task_update",
-            "task_id": str(direct_schedule_change.get("task_id", "")).strip(),
-            "task_name": "",
+            "task_id": task_id,
+            "task_name": task_name,
+            "requested_task_ref": requested_task_ref,
             "updates": {
                 "start_week": int(direct_schedule_change.get("start_week", 1) or 1),
                 "end_week": int(direct_schedule_change.get("end_week", 1) or 1),
@@ -4445,8 +4769,14 @@ def assistant_chat(
             pending_change["updates"].get("start_week"),
             pending_change["updates"].get("end_week"),
         )
+        target_preview = _format_task_target_preview(
+            tasks,
+            pending_change.get("task_id"),
+            pending_change.get("task_name"),
+            pending_change.get("requested_task_ref"),
+        )
         reply = (
-            f"已生成待执行排期修改：目标任务={pending_change['task_id']}，"
+            f"已生成待执行排期修改：目标任务={target_preview}，"
             f"排期改为 {schedule_label}。\n\n"
             "回复“确认执行”才会落盘并重排期，回复“取消执行”可撤销这次修改。"
         )
@@ -4466,10 +4796,16 @@ def assistant_chat(
 
     direct_extend = _try_parse_direct_duration_extend(text)
     if direct_extend:
+        task_id, task_name, requested_task_ref = _freeze_task_target(
+            tasks,
+            str(direct_extend.get("task_id", "")).strip(),
+            "",
+        )
         pending_change = {
             "kind": "task_extend",
-            "task_id": str(direct_extend.get("task_id", "")).strip(),
-            "task_name": "",
+            "task_id": task_id,
+            "task_name": task_name,
+            "requested_task_ref": requested_task_ref,
             "delta_days": int(direct_extend.get("delta_days", 0) or 0),
             "need_reschedule": True,
             "requested_at": _now_iso(),
@@ -4478,8 +4814,14 @@ def assistant_chat(
 
         delta_days = int(pending_change.get("delta_days", 0) or 0)
         delta_weeks = max(1, (delta_days + 6) // 7)
+        target_preview = _format_task_target_preview(
+            tasks,
+            pending_change.get("task_id"),
+            pending_change.get("task_name"),
+            pending_change.get("requested_task_ref"),
+        )
         reply = (
-            f"已生成待执行延长工期：目标任务={pending_change['task_id']}，"
+            f"已生成待执行延长工期：目标任务={target_preview}，"
             f"延长 {delta_weeks} 周（{delta_days} 天）。\n\n"
             "回复“确认执行”才会落盘并重排期，回复“取消执行”可撤销这次修改。"
         )
@@ -4609,6 +4951,8 @@ def assistant_chat(
                 dep_change["from"] = _normalize_task_ref_text(dep_change.get("from"))
                 dep_change["to"] = _normalize_task_ref_text(dep_change.get("to"))
                 normalized_ops.append({"kind": "dependency_update", "dependency_change": dep_change})
+        normalized_ops = _coerce_operation_task_refs_from_user_text(tasks, text, normalized_ops)
+        normalized_ops = _freeze_operation_targets(tasks, normalized_ops)
         if len(normalized_ops) >= 2:
             pending_change = {
                 "kind": "batch_update",
@@ -4616,7 +4960,7 @@ def assistant_chat(
                 "requested_at": _now_iso(),
             }
             save_project_assistant_state(project_id, pending_change=pending_change)
-            preview = _summarize_operations(normalized_ops)
+            preview = _summarize_operations(tasks, normalized_ops)
             reply = ((memory_note + "\n\n") if memory_note else "") + ((answer + "\n\n") if answer else "") + (
                 "已生成批量待执行操作：\n"
                 f"{preview}\n\n"
@@ -4640,12 +4984,13 @@ def assistant_chat(
                 "kind": "task_extend",
                 "task_id": _normalize_task_ref_text(op.get("task_id")),
                 "task_name": str(op.get("task_name", "")).strip(),
+                "requested_task_ref": _normalize_task_ref_text(op.get("requested_task_ref")),
                 "delta_days": int(op.get("delta_days", 0) or 0),
                 "need_reschedule": True,
                 "requested_at": _now_iso(),
             }
             save_project_assistant_state(project_id, pending_change=pending_change)
-            preview = _summarize_operations(normalized_ops)
+            preview = _summarize_operations(tasks, normalized_ops)
             reply = ((memory_note + "\n\n") if memory_note else "") + ((answer + "\n\n") if answer else "") + (
                 "已生成待执行修改：\n"
                 f"{preview}\n\n"
@@ -4665,15 +5010,18 @@ def assistant_chat(
 
         dep_change, dep_err = _sanitize_dependency_change(dependency_change) if dependency_change else ({}, None)
         if dep_change and not dep_err:
+            dep_change = _freeze_dependency_change_task_refs(tasks, dep_change)
             pending_change = {
                 "kind": "dependency_update",
                 "dependency_change": dep_change,
                 "requested_at": _now_iso(),
             }
             save_project_assistant_state(project_id, pending_change=pending_change)
+            dep_from_preview = _format_dependency_endpoint_preview(tasks, dep_change, "from")
+            dep_to_preview = _format_dependency_endpoint_preview(tasks, dep_change, "to")
             preview = (
                 "已生成待执行依赖变更："
-                f"action={dep_change['action']}，{dep_change['from']} -> {dep_change['to']}，"
+                f"action={dep_change['action']}，{dep_from_preview} -> {dep_to_preview}，"
                 f"type={dep_change['type']}，lag={dep_change['lag_weeks']}w，overlap={dep_change['overlap_weeks']}w。"
                 "\n\n回复“确认执行”才会落盘，回复“取消执行”可撤销这次修改。"
             )
@@ -4760,6 +5108,7 @@ def assistant_chat(
         if change_action in {"delete", "remove"}:
             task_id = _normalize_task_ref_text(change.get("task_id"))
             task_name = str(change.get("task_name", "")).strip()
+            task_id, task_name = _coerce_single_task_ref_from_user_text(tasks, text, task_id, task_name)
             if not task_id and task_name and re.fullmatch(rf"{_TASK_REF_TOKEN_PATTERN}", task_name, flags=re.IGNORECASE):
                 task_id = _normalize_task_ref_text(task_name)
                 task_name = ""
@@ -4777,15 +5126,23 @@ def assistant_chat(
                     "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
                 }
 
+            task_id, task_name, requested_task_ref = _freeze_task_target(tasks, task_id, task_name)
+
             pending_change = {
                 "kind": "task_delete",
                 "task_id": task_id,
                 "task_name": task_name,
+                "requested_task_ref": requested_task_ref,
                 "need_reschedule": bool(change.get("need_reschedule", True)),
                 "requested_at": _now_iso(),
             }
             save_project_assistant_state(project_id, pending_change=pending_change)
-            target = task_id or task_name
+            target = _format_task_target_preview(
+                tasks,
+                pending_change.get("task_id"),
+                pending_change.get("task_name"),
+                pending_change.get("requested_task_ref"),
+            )
             preview = (
                 f"已生成待执行删除：目标任务={target}。"
                 "\n\n回复“确认执行”才会落盘，回复“取消执行”可撤销这次修改。"
@@ -4820,6 +5177,7 @@ def assistant_chat(
 
         task_id = _normalize_task_ref_text(change.get("task_id"))
         task_name = str(change.get("task_name", "")).strip()
+        task_id, task_name = _coerce_single_task_ref_from_user_text(tasks, text, task_id, task_name)
         if not task_id and task_name and re.fullmatch(rf"{_TASK_REF_TOKEN_PATTERN}", task_name, flags=re.IGNORECASE):
             task_id = _normalize_task_ref_text(task_name)
             task_name = ""
@@ -4837,17 +5195,25 @@ def assistant_chat(
                 "memory_updates": _memory_updates_payload(added_system_entries, added_project_entries),
             }
 
+        task_id, task_name, requested_task_ref = _freeze_task_target(tasks, task_id, task_name)
+
         pending_change = {
             "kind": "task_update",
             "task_id": task_id,
             "task_name": task_name,
+            "requested_task_ref": requested_task_ref,
             "updates": updates,
             "need_reschedule": bool(change.get("need_reschedule", False)),
             "requested_at": _now_iso(),
         }
         save_project_assistant_state(project_id, pending_change=pending_change)
 
-        target = pending_change["task_id"] or pending_change["task_name"] or "(未识别目标任务)"
+        target = _format_task_target_preview(
+            tasks,
+            pending_change.get("task_id"),
+            pending_change.get("task_name"),
+            pending_change.get("requested_task_ref"),
+        )
         schedule_label = _updates_schedule_window_label(updates)
         preview = (
             (
