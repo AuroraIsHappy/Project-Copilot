@@ -1,0 +1,5 @@
+[theme]
+# No base theme is forced — the app adapts to the system preference via CSS
+# (prefers-color-scheme media query + html[data-theme] selector).
+# Remove or comment out the lines below to restore Streamlit's default picker.
+# base = "light"
