@@ -126,7 +126,7 @@ def _normalize_revised_dependencies(dependencies: list[dict], valid_task_ids: se
     return normalized
 
 
-def multi_agent_plan(okr: str, progress_callback=None) -> dict:
+def multi_agent_plan(okr: str, target_total_weeks: int | None = None, progress_callback=None) -> dict:
     total_steps = 3
     log_agent_step("pipeline", "start", {"okr": okr})
 
@@ -160,7 +160,7 @@ def multi_agent_plan(okr: str, progress_callback=None) -> dict:
         total_steps=total_steps,
         message="plan-builder agent working...",
     )
-    plan_payload = plan_builder_agent.run(strategies)
+    plan_payload = plan_builder_agent.run(strategies, target_total_weeks=target_total_weeks)
     if not isinstance(plan_payload, dict):
         plan_payload = {}
 
@@ -189,7 +189,7 @@ def multi_agent_plan(okr: str, progress_callback=None) -> dict:
         total_steps=total_steps,
         message="review & refine agent working...",
     )
-    review_payload = review_refine_agent.run(tasks, dependencies)
+    review_payload = review_refine_agent.run(tasks, dependencies, target_total_weeks=target_total_weeks)
     if not isinstance(review_payload, dict):
         review_payload = {}
     log_agent_step("review_refine_agent", "output", review_payload)

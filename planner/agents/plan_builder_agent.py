@@ -148,7 +148,19 @@ def _parse(response: str) -> dict:
     }
 
 
-def plan_builder_prompt(strategies: list[dict]) -> str:
+def plan_builder_prompt(strategies: list[dict], target_total_weeks: int | None = None) -> str:
+    horizon_rule = ""
+    if target_total_weeks is not None:
+        try:
+            normalized_weeks = max(1, int(target_total_weeks))
+        except (TypeError, ValueError):
+            normalized_weeks = None
+        if normalized_weeks is not None:
+            horizon_rule = (
+                f"- The total project timeline from first task start to final task end should be close to {normalized_weeks} weeks.\n"
+                "- Tune durations and dependency overlap/lag to make the initial plan fit that horizon.\n"
+            )
+
     prompt = f"""
 You are an experienced technical project planner.
 
@@ -177,6 +189,7 @@ DEPENDENCY RULES
 - Avoid circular dependencies.
 - overlap_weeks must be >= 0.
 - lag_weeks can be negative, zero, or positive.
+{horizon_rule}
 
 FLOW GUIDANCE
 
@@ -223,8 +236,8 @@ STRICT OUTPUT RULES
     return prompt
 
 
-def run(strategies: list[dict]) -> dict:
-    prompt = plan_builder_prompt(strategies)
+def run(strategies: list[dict], target_total_weeks: int | None = None) -> dict:
+    prompt = plan_builder_prompt(strategies, target_total_weeks=target_total_weeks)
     response = call_llm(
         prompt,
         trace_label="plan_builder_agent",
@@ -232,5 +245,5 @@ def run(strategies: list[dict]) -> dict:
     return _parse(response)
 
 
-def plan_builder_agent(strategies):
-    return run(strategies)
+def plan_builder_agent(strategies, target_total_weeks: int | None = None):
+    return run(strategies, target_total_weeks=target_total_weeks)

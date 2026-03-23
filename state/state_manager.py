@@ -39,6 +39,13 @@ def _normalize_gantt_theme(value, default: str = "default") -> str:
     return "default"
 
 
+def _normalize_plan_total_weeks(value, default: int = 12) -> int:
+    try:
+        return max(1, min(520, int(value)))
+    except (TypeError, ValueError):
+        return max(1, min(520, int(default)))
+
+
 def _normalize_seen_summary_files(value) -> dict[str, list[str]]:
     if not isinstance(value, dict):
         return {}
@@ -863,6 +870,23 @@ def save_project_gantt_theme(project_id: str, theme: str) -> str:
     state["gantt_theme"] = normalized_theme
     write_json(file_path, state)
     return normalized_theme
+
+
+def get_project_plan_total_weeks(project_id: str, default: int = 12) -> tuple[int, bool]:
+    state = read_json(str(_project_file(project_id)), default={})
+    has_saved_value = "plan_total_weeks" in state
+    raw_value = state.get("plan_total_weeks", default)
+    total_weeks = _normalize_plan_total_weeks(raw_value, default=default)
+    return total_weeks, has_saved_value
+
+
+def save_project_plan_total_weeks(project_id: str, total_weeks: int) -> int:
+    file_path = str(_project_file(project_id))
+    state = read_json(file_path, default={})
+    normalized_weeks = _normalize_plan_total_weeks(total_weeks)
+    state["plan_total_weeks"] = normalized_weeks
+    write_json(file_path, state)
+    return normalized_weeks
 
 
 def load_project_summary_state(project_id: str) -> dict:

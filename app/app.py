@@ -40,6 +40,8 @@ from controller import list_all_projects
 from controller import create_new_project
 from controller import delete_existing_project
 from controller import load_saved_risk_threshold
+from controller import load_saved_plan_total_weeks
+from controller import save_plan_total_weeks
 from controller import load_saved_gantt_theme
 from controller import save_gantt_theme
 from controller import load_gantt_theme_options
@@ -1631,16 +1633,34 @@ def _render_generate_plan_form(project_id: str, is_regen: bool = False) -> None:
     )
     planning_mode = "multi" if planning_mode_label.startswith("多Agent") else "single"
 
+    saved_total_weeks, _ = load_saved_plan_total_weeks(project_id)
+    total_weeks = st.number_input(
+        "项目完成周数",
+        min_value=1,
+        max_value=520,
+        value=int(saved_total_weeks),
+        step=1,
+        key=f"plan_total_weeks_input_{project_id}",
+        help="例如输入 12，表示计划总时长固定为 12 周左右。",
+    )
+
     btn_label = "重新生成计划" if is_regen else "Generate Plan"
     if st.button(btn_label, key="gen_plan_form_btn"):
         if not okr_text.strip():
             st.warning("请先输入 OKR，再生成计划。")
         else:
             try:
+                normalized_total_weeks = max(1, int(total_weeks))
+                save_plan_total_weeks(project_id, normalized_total_weeks)
                 reset_token_usage_tracker()
                 if planning_mode == "single":
                     with st.spinner("正在生成任务计划...  这大概需要1分钟左右✈️..."):
-                        generated = generate_plan_by_mode(okr_text, project_id, mode=planning_mode)
+                        generated = generate_plan_by_mode(
+                            okr_text,
+                            project_id,
+                            mode=planning_mode,
+                            target_total_weeks=normalized_total_weeks,
+                        )
                 else:
                     status_placeholder = st.empty()
                     detail_placeholder = st.empty()
@@ -1677,6 +1697,7 @@ def _render_generate_plan_form(project_id: str, is_regen: bool = False) -> None:
                             project_id,
                             mode=planning_mode,
                             progress_callback=_progress_callback,
+                            target_total_weeks=normalized_total_weeks,
                         )
 
                     progress_bar.progress(100)

@@ -219,7 +219,19 @@ Previous invalid output:
 {bad_response}
 """
 
-def build_prompt(okr):
+def build_prompt(okr, target_total_weeks: int | None = None):
+
+    horizon_rule = ""
+    if target_total_weeks is not None:
+        try:
+            normalized_weeks = max(1, int(target_total_weeks))
+        except (TypeError, ValueError):
+            normalized_weeks = None
+        if normalized_weeks is not None:
+            horizon_rule = (
+                f"- The full project timeline from the first task start to the final task end should be close to {normalized_weeks} weeks.\n"
+                "- Choose durations and dependency overlap/lag so the overall schedule is realistic within that horizon.\n"
+            )
 
     prompt = f"""
 You are a senior technical project planner.
@@ -249,6 +261,7 @@ PLANNING GUIDELINES:
 - Ensure tasks cover the full project lifecycle.
 - Add realistic dependencies.
 - Allow overlap when reasonable by using overlap_weeks > 0.
+{horizon_rule}
 
 Language rule:
 - Detect the OKR language from user input.
@@ -335,9 +348,9 @@ def parse_tasks(response):
     return parse_plan(response).get("tasks", [])
 
 
-def generate_tasks_with_dependencies(okr_text: str) -> dict:
+def generate_tasks_with_dependencies(okr_text: str, target_total_weeks: int | None = None) -> dict:
 
-    prompt = build_prompt(okr_text)
+    prompt = build_prompt(okr_text, target_total_weeks=target_total_weeks)
 
     response = ""
     tasks: list[dict] = []
@@ -368,5 +381,5 @@ def generate_tasks_with_dependencies(okr_text: str) -> dict:
     return {"tasks": tasks, "dependencies": dependencies}
 
 
-def generate_tasks(okr_text):
-    return generate_tasks_with_dependencies(okr_text).get("tasks", [])
+def generate_tasks(okr_text, target_total_weeks: int | None = None):
+    return generate_tasks_with_dependencies(okr_text, target_total_weeks=target_total_weeks).get("tasks", [])

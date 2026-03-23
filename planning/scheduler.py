@@ -6,6 +6,15 @@ DEFAULT_STATUS = "Planned"
 DEFAULT_OWNERS = ("Strategy", "Product", "Engineering", "Data")
 
 
+def _normalize_target_total_days(target_total_days) -> int | None:
+    if target_total_days is None:
+        return None
+    try:
+        return max(1, int(target_total_days))
+    except (TypeError, ValueError):
+        return None
+
+
 def _task_id(task: dict, index: int) -> str:
     return str(task.get("task_id") or f"T{index}").strip() or f"T{index}"
 
@@ -209,10 +218,73 @@ def _dependency_schedule(tasks: list[dict], dependencies: list[dict], start_date
     return scheduled_tasks
 
 
-def schedule_tasks(tasks, dependencies=None):
+def _align_schedule_to_total_days(scheduled_tasks: list[dict], target_total_days: int | None) -> list[dict]:
+    target_days = _normalize_target_total_days(target_total_days)
+    if target_days is None or not scheduled_tasks:
+        return scheduled_tasks
+
+    starts = [task.get("start") for task in scheduled_tasks if isinstance(task.get("start"), date)]
+    ends = [task.get("end") for task in scheduled_tasks if isinstance(task.get("end"), date)]
+    if not starts or not ends:
+        return scheduled_tasks
+
+    min_start = min(starts)
+    max_end = max(ends)
+    current_total_days = max(1, (max_end - min_start).days)
+    if current_total_days == target_days:
+        return scheduled_tasks
+
+    aligned_tasks: list[dict] = []
+    for task in scheduled_tasks:
+        task_start = task.get("start")
+        task_end = task.get("end")
+        if not isinstance(task_start, date) or not isinstance(task_end, date):
+            aligned_tasks.append(task)
+            continue
+
+        start_offset = max(0, (task_start - min_start).days)
+        end_offset = max(start_offset + 1, (task_end - min_start).days)
+
+        new_start_offset = (start_offset * target_days) // current_total_days
+        new_end_offset = (end_offset * target_days + current_total_days - 1) // current_total_days
+
+        new_start_offset = min(max(0, new_start_offset), target_days)
+        new_end_offset = min(max(0, new_end_offset), target_days)
+        if new_end_offset <= new_start_offset:
+            if new_start_offset >= target_days:
+                new_start_offset = max(0, target_days - 1)
+                new_end_offset = target_days
+            else:
+                new_end_offset = min(target_days, new_start_offset + 1)
+
+        new_start = min_start + timedelta(days=new_start_offset)
+        new_end = min_start + timedelta(days=new_end_offset)
+        new_duration_days = max(1, (new_end - new_start).days)
+        new_duration_weeks = max(1, (new_duration_days + 6) // 7)
+
+        aligned_task = dict(task)
+        aligned_task.update(
+            {
+                "start": new_start,
+                "end": new_end,
+                "duration_days": new_duration_days,
+                "duration_weeks": new_duration_weeks,
+                "duration": new_duration_weeks,
+            }
+        )
+        if "start_week" in aligned_task:
+            aligned_task["start_week"] = max(1, new_start_offset // 7 + 1)
+        aligned_tasks.append(aligned_task)
+
+    return aligned_tasks
+
+
+def schedule_tasks(tasks, dependencies=None, target_total_days=None):
 
     start_date = date.today()
     deps = dependencies or []
     if deps:
-        return _dependency_schedule(tasks, deps, start_date)
-    return _sequential_schedule(tasks, start_date)
+        scheduled = _dependency_schedule(tasks, deps, start_date)
+    else:
+        scheduled = _sequential_schedule(tasks, start_date)
+    return _align_schedule_to_total_days(scheduled, target_total_days)
