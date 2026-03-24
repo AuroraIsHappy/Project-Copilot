@@ -1131,6 +1131,153 @@ def _has_cairosvg() -> bool:
         return False
 
 
+def _dashboard_detail_view_key(project_id: str) -> str:
+    return f"dashboard_detail_view_{project_id}"
+
+
+def _render_dashboard_detail_content(
+    project_id: str,
+    project_name: str,
+    tasks: list[dict],
+    dependencies: list[dict],
+    gantt_theme: str,
+) -> None:
+    view_options = ["甘特图", "依赖图", "任务表"]
+    view_key = _dashboard_detail_view_key(project_id)
+    current_view = str(st.session_state.get(view_key, view_options[0]) or view_options[0])
+    if current_view not in view_options:
+        current_view = view_options[0]
+        st.session_state[view_key] = current_view
+
+    selected_view = st.radio(
+        "计划视图",
+        options=view_options,
+        key=view_key,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    if selected_view == "甘特图":
+        objective = _extract_objective(tasks)
+        timeline_rows = _build_timeline_rows(tasks)
+        gantt_payload = render_gantt(timeline_rows, objective=objective, theme=gantt_theme)
+        gantt_export_html = _wrap_export_html(gantt_payload["html"], f"{project_name} - Timeline")
+        gantt_file = f"{_safe_file_stem(project_name)}_timeline.html"
+        st.download_button(
+            "下载甘特图 (HTML)",
+            data=gantt_export_html.encode("utf-8"),
+            file_name=gantt_file,
+            mime="text/html",
+            key=f"download_gantt_html_{project_id}",
+        )
+        components.html(gantt_payload["html"], height=gantt_payload["height"], scrolling=True)
+        return
+
+    if selected_view == "依赖图":
+        graph_payload = render_graph(tasks, dependencies)
+        graph_png = _dependency_svg_to_png_bytes(
+            str(graph_payload.get("svg", "")),
+            int(graph_payload.get("svg_width", 0) or 0),
+            int(graph_payload.get("svg_height", 0) or 0),
+        )
+        graph_file = f"{_safe_file_stem(project_name)}_dependency_graph.png"
+        if graph_png:
+            st.download_button(
+                "下载依赖图 (PNG)",
+                data=graph_png,
+                file_name=graph_file,
+                mime="image/png",
+                key=f"download_graph_png_{project_id}",
+            )
+        elif not _has_cairosvg():
+            st.info("当前环境未安装 cairosvg，暂无法导出依赖图 PNG。")
+        else:
+            st.info("依赖图 PNG 正在生成中或当前图无可导出的 SVG 内容。")
+        components.html(graph_payload["html"], height=graph_payload["height"], scrolling=True)
+        return
+
+    table_rows = _build_table_rows(tasks)
+    st.dataframe(table_rows, use_container_width=True, hide_index=True)
+
+
+def _render_dashboard_side_panel(
+    project_id: str,
+    project_name: str,
+    tasks: list[dict],
+    insight_settings: dict,
+    assistant_open: bool,
+    show_summary_on_dashboard: bool,
+) -> None:
+    if assistant_open:
+        with st.container(key=f"assistant_panel_wrap_{project_id}"):
+            _render_assistant_panel(project_id, project_name)
+        return
+
+    render_metrics(tasks)
+    st.markdown("---")
+    if st.button("改变本项目的OKR，重新生成计划", key="btn_goto_regen", use_container_width=True):
+        st.session_state.main_view_mode = "regenerate"
+        st.rerun()
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    if st.button("根据团队工作总结，更新任务状态", key="btn_goto_summary", use_container_width=True):
+        st.session_state.main_view_mode = "update_summary"
+        st.rerun()
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    if st.button("已保存的 Insight Card", key="btn_goto_saved_insight", use_container_width=True):
+        st.session_state.main_view_mode = "saved_insight_cards"
+        st.rerun()
+    st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    manual_generation_ready = _insight_generation_ready(insight_settings)
+    insight_running = _insight_is_running(project_id)
+    manual_btn_label = "⏳ Insight 生成中..." if insight_running else "手动生成今日 Insight"
+    if st.button(
+        manual_btn_label,
+        key="btn_manual_insight",
+        use_container_width=True,
+        disabled=(not manual_generation_ready) or insight_running,
+    ):
+        _generate_insight_and_refresh(project_id, open_after_generate=True)
+    if not manual_generation_ready:
+        st.caption(_insight_generation_disabled_message(insight_settings))
+
+    gen_result = st.session_state.get("_gen_result")
+    if gen_result:
+        st.success(f"已生成 {gen_result['count']} 个任务")
+        total = gen_result.get("total_tokens", 0)
+        logical_calls = int(gen_result.get("logical_call_count", gen_result.get("request_count", 0)) or 0)
+        provider_responses = int(gen_result.get("request_count", 0) or 0)
+        empty_retries = int(
+            gen_result.get(
+                "empty_response_retry_count",
+                max(0, provider_responses - logical_calls),
+            )
+            or 0
+        )
+        calls_text = f"calls={logical_calls}"
+        if empty_retries > 0 or provider_responses != logical_calls:
+            calls_text += f", retries={empty_retries}, provider_responses={provider_responses}"
+        if total > 0:
+            st.caption(
+                f"Token 消耗: total={total:,} "
+                f"(prompt={gen_result['prompt_tokens']:,}, "
+                f"completion={gen_result['completion_tokens']:,}, "
+                f"{calls_text})"
+            )
+        else:
+            st.caption("Token 消耗: 当前 Provider 未返回 usage 统计。")
+
+    summary_result = st.session_state.get("summary_update_result")
+    if show_summary_on_dashboard and isinstance(summary_result, dict) and summary_result.get("project_id") == project_id:
+        if summary_result.get("status") == "ok":
+            st.success(
+                f"总结已更新：{int(summary_result.get('summaries_count', 0))} 份总结，"
+                f"{int(summary_result.get('changed_tasks_count', 0))} 个任务变更"
+            )
+            risk_count = int(summary_result.get("risk_count", 0) or 0)
+            if risk_count > 0:
+                st.warning(f"发现 {risk_count} 个风险任务（进度落后 >= {int(summary_result.get('risk_lag_threshold', 30))}%）。")
+
+
 def render_kr_toolbar(tasks: list[dict]) -> dict[str, bool]:
     grouped = _group_tasks_by_kr(tasks)
     kr_names = list(grouped.keys())
@@ -3284,6 +3431,17 @@ def main() -> None:
         left_col = st.container()
         right_col = None
 
+    if right_col is not None:
+        with right_col:
+            _render_dashboard_side_panel(
+                active_project_id,
+                project_name,
+                tasks,
+                insight_settings,
+                assistant_open,
+                show_summary_on_dashboard,
+            )
+
     with left_col:
         toggle_spacer_col, toggle_btn_col = st.columns([6, 1], gap="small")
         with toggle_btn_col:
@@ -3336,118 +3494,13 @@ def main() -> None:
         if st.session_state.get(_insight_feed_open_key(active_project_id), False):
             _render_insight_feed(active_project_id)
 
-        tab_timeline, tab_graph, tab_table = st.tabs(["甘特图", "依赖图", "任务表"])
-
-        with tab_timeline:
-            objective = _extract_objective(tasks)
-            timeline_rows = _build_timeline_rows(tasks)
-            gantt_payload = render_gantt(timeline_rows, objective=objective, theme=gantt_theme)
-            gantt_export_html = _wrap_export_html(gantt_payload["html"], f"{project_name} - Timeline")
-            gantt_file = f"{_safe_file_stem(project_name)}_timeline.html"
-            st.download_button(
-                "下载甘特图 (HTML)",
-                data=gantt_export_html.encode("utf-8"),
-                file_name=gantt_file,
-                mime="text/html",
-                key=f"download_gantt_html_{active_project_id}",
-            )
-            components.html(gantt_payload["html"], height=gantt_payload["height"], scrolling=True)
-
-        with tab_graph:
-            graph_payload = render_graph(tasks, dependencies)
-            graph_png = _dependency_svg_to_png_bytes(
-                str(graph_payload.get("svg", "")),
-                int(graph_payload.get("svg_width", 0) or 0),
-                int(graph_payload.get("svg_height", 0) or 0),
-            )
-            graph_file = f"{_safe_file_stem(project_name)}_dependency_graph.png"
-            if graph_png:
-                st.download_button(
-                    "下载依赖图 (PNG)",
-                    data=graph_png,
-                    file_name=graph_file,
-                    mime="image/png",
-                    key=f"download_graph_png_{active_project_id}",
-                )
-            elif not _has_cairosvg():
-                st.info("当前环境未安装 cairosvg，暂无法导出依赖图 PNG。")
-            else:
-                st.info("依赖图 PNG 正在生成中或当前图无可导出的 SVG 内容。")
-            components.html(graph_payload["html"], height=graph_payload["height"], scrolling=True)
-
-        with tab_table:
-            table_rows = _build_table_rows(tasks)
-            st.dataframe(table_rows, use_container_width=True, hide_index=True)
-
-    if right_col is not None:
-        with right_col:
-            if assistant_open:
-                with st.container(key=f"assistant_panel_wrap_{active_project_id}"):
-                    _render_assistant_panel(active_project_id, project_name)
-            else:
-                render_metrics(tasks)
-                st.markdown("---")
-                if st.button("改变本项目的OKR，重新生成计划", key="btn_goto_regen", use_container_width=True):
-                    st.session_state.main_view_mode = "regenerate"
-                    st.rerun()
-                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                if st.button("根据团队工作总结，更新任务状态", key="btn_goto_summary", use_container_width=True):
-                    st.session_state.main_view_mode = "update_summary"
-                    st.rerun()
-                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                if st.button("已保存的 Insight Card", key="btn_goto_saved_insight", use_container_width=True):
-                    st.session_state.main_view_mode = "saved_insight_cards"
-                    st.rerun()
-                st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                manual_generation_ready = _insight_generation_ready(insight_settings)
-                insight_running = _insight_is_running(active_project_id)
-                manual_btn_label = "⏳ Insight 生成中..." if insight_running else "手动生成今日 Insight"
-                if st.button(
-                    manual_btn_label,
-                    key="btn_manual_insight",
-                    use_container_width=True,
-                    disabled=(not manual_generation_ready) or insight_running,
-                ):
-                    _generate_insight_and_refresh(active_project_id, open_after_generate=True)
-                if not manual_generation_ready:
-                    st.caption(_insight_generation_disabled_message(insight_settings))
-
-                gen_result = st.session_state.get("_gen_result")
-                if gen_result:
-                    st.success(f"已生成 {gen_result['count']} 个任务")
-                    total = gen_result.get("total_tokens", 0)
-                    logical_calls = int(gen_result.get("logical_call_count", gen_result.get("request_count", 0)) or 0)
-                    provider_responses = int(gen_result.get("request_count", 0) or 0)
-                    empty_retries = int(
-                        gen_result.get(
-                            "empty_response_retry_count",
-                            max(0, provider_responses - logical_calls),
-                        )
-                        or 0
-                    )
-                    calls_text = f"calls={logical_calls}"
-                    if empty_retries > 0 or provider_responses != logical_calls:
-                        calls_text += f", retries={empty_retries}, provider_responses={provider_responses}"
-                    if total > 0:
-                        st.caption(
-                            f"Token 消耗: total={total:,} "
-                            f"(prompt={gen_result['prompt_tokens']:,}, "
-                            f"completion={gen_result['completion_tokens']:,}, "
-                            f"{calls_text})"
-                        )
-                    else:
-                        st.caption("Token 消耗: 当前 Provider 未返回 usage 统计。")
-
-                summary_result = st.session_state.get("summary_update_result")
-                if show_summary_on_dashboard and isinstance(summary_result, dict) and summary_result.get("project_id") == active_project_id:
-                    if summary_result.get("status") == "ok":
-                        st.success(
-                            f"总结已更新：{int(summary_result.get('summaries_count', 0))} 份总结，"
-                            f"{int(summary_result.get('changed_tasks_count', 0))} 个任务变更"
-                        )
-                        risk_count = int(summary_result.get("risk_count", 0) or 0)
-                        if risk_count > 0:
-                            st.warning(f"发现 {risk_count} 个风险任务（进度落后 >= {int(summary_result.get('risk_lag_threshold', 30))}%）。")
+        _render_dashboard_detail_content(
+            active_project_id,
+            project_name,
+            tasks,
+            dependencies,
+            gantt_theme,
+        )
 
     _render_insight_fab(active_project_id, insight_state)
 
